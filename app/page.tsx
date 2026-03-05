@@ -118,7 +118,7 @@ function UploadZone({ onFile, loading }: { onFile: (f: File) => void; loading: b
           fontSize: "0.8rem", color: "#c4b5fd", letterSpacing: "0.08em", fontWeight: 500,
         }}>
           <span style={{ display:"inline-block", width:6, height:6, borderRadius:"50%", background:"#a78bfa", animation:"pulse-glow 2s ease-in-out infinite" }} />
-          AI-Powered Resume Parser
+          AI-Powered Resume Parsing tool
         </div>
         <h1 style={{
           fontSize: "clamp(2rem, 5vw, 3.5rem)", fontWeight: 800,
