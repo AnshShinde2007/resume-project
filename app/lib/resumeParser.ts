@@ -39,13 +39,6 @@ function escRe(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Resolve an alias → canonical skill name, or null if no match */
-function resolveAlias(token: string): string | null {
-  const lower = token.toLowerCase().trim();
-  if (SKILL_ALIASES[lower]) return SKILL_ALIASES[lower];
-  return null;
-}
-
 /** Check if `skill` appears as a whole token in `text` */
 function skillInText(skill: string, text: string): boolean {
   const esc = escRe(skill);
@@ -58,9 +51,6 @@ function skillInText(skill: string, text: string): boolean {
 // ─── Section extraction ───────────────────────────────────────────────────────
 
 function extractSections(text: string): Record<string, string> {
-  // Case-sensitive: Title Case and ALL-CAPS forms only.
-  // Removing `i` flag prevents prose words like "innovative projects" from
-  // false-matching the "Projects" section header.
   const LABELS: Array<[RegExp, string]> = [
     [/Professional\s+Summary|PROFESSIONAL\s+SUMMARY|Career\s+Summary/, "summary"],
     [/\bSummary\b|SUMMARY|\bObjective\b|OBJECTIVE|\bProfile\b|PROFILE/, "summary"],
@@ -72,13 +62,10 @@ function extractSections(text: string): Record<string, string> {
     [/\bInterests\b|\bLanguages\b|\bHobbies\b|\bVolunteer\b/, "misc"],
   ];
 
-  // Build a pattern that matches headers ANYWHERE in the text (not just line-starts).
-  // This is critical for PDFs where everything lands on one line.
-  // We use a lookahead for the label followed by optional separator.
   const allLabels = LABELS.map(([re]) => re.source).join("|");
   const headerPattern = new RegExp(
-    `(?:^|\\s)(${allLabels})[ \t]*[:\\-|–—]?(?=\\s|$)`,
-    "gm"   // no 'i' flag — case-sensitive to avoid prose false-matches
+    `(?:^|\\s)(${allLabels})[ \\t]*[:\\-|–—]?(?=\\s|$)`,
+    "gm"
   );
 
   const sections: Record<string, string> = {};
@@ -93,7 +80,6 @@ function extractSections(text: string): Record<string, string> {
       if (re.test(headerText)) { key = canonical; break; }
     }
 
-    // Start content AFTER the header word (and its separator)
     const start = (match.index ?? 0) + match[0].length;
     const end = matches[i + 1]?.index ?? text.length;
     const content = text.slice(start, end).trim();
@@ -109,7 +95,6 @@ function extractSections(text: string): Record<string, string> {
 // ─── Name ─────────────────────────────────────────────────────────────────────
 
 function extractName(lines: string[]): string {
-  // Strategy A: scan clean lines (PDF with proper line-breaks)
   const sectionKeywords = /^(experience|education|skills|projects|summary|objective|work|contact|profile|certifications|awards|languages|interests|volunteer|publications|references)/i;
 
   function isCleanLine(line: string): boolean {
@@ -139,26 +124,21 @@ function extractName(lines: string[]): string {
     }
   }
 
-  // Strategy B: for single-line PDFs, grab opening proper-noun words
-  // before hitting a job title, digit, or @
   const fullStart = lines.slice(0, 5).join(" ").trim();
   const words = fullStart.split(/\s+/);
   const nameWords: string[] = [];
   for (const word of words) {
     const clean = word.replace(/[^a-zA-Z]/g, "");
-    // Stop at job title words, digits, or contact info
     if (JOB_TITLE_WORDS.has(clean.toLowerCase())) break;
     if (/\d|@/.test(word)) break;
     if (word.includes(":") || /^https?/i.test(word)) break;
-    // Must start with capital to be part of a name
     if (!/^[A-Z]/.test(word)) break;
     nameWords.push(clean || word);
-    if (nameWords.length >= 4) break; // max 4 name words
+    if (nameWords.length >= 4) break;
   }
 
   if (nameWords.length >= 2) return nameWords.join(" ");
-  if (nameWords.length === 1) return nameWords[0]; // single-word name fallback
-
+  if (nameWords.length === 1) return nameWords[0];
   return "";
 }
 
@@ -169,24 +149,19 @@ function extractEmail(text: string): string {
   return m ? m[0] : "";
 }
 
-// FIX 3: safer phone regex — requires structured digit groupings
 function extractPhone(text: string): string {
   const m = text.match(
     /(?<!\d)(\+?[\d]{1,3}[\s\-]?)?(\(?\d{2,4}\)?[\s\-]?)?\d{3,5}[\s\-]?\d{4,5}(?!\d)/
   );
   if (!m) return "";
   const raw = m[0].trim();
-  // Sanity check: must have at least 7 digits total
   const digits = raw.replace(/\D/g, "");
   return digits.length >= 7 ? raw : "";
 }
 
-// FIX 2: global-friendly location — handles "Mumbai, India", "Pune, Maharashtra", "Delhi NCR"
 function extractLocation(text: string): string {
-  // Try structured "City, Region/Country" first
   const structured = text.match(/\b([A-Z][a-zA-Z\s]{1,20},\s*[A-Z][a-zA-Z\s]{1,20})\b/);
   if (structured) return structured[0].trim();
-  // Fallback: known Indian cities / NCR patterns
   const city = text.match(/\b(Mumbai|Delhi|NCR|Bangalore|Bengaluru|Chennai|Hyderabad|Pune|Kolkata|Ahmedabad|Jaipur|Surat|Lucknow|Noida|Gurgaon|Gurugram)\b/i);
   return city ? city[0] : "";
 }
@@ -212,7 +187,6 @@ function extractSkills(fullText: string, sections: Record<string, string>): stri
   const found = new Set<string>();
   const skillsSection = sections["skills"] ?? "";
 
-  // Pass 1: canonical skill names
   for (const skill of TECH_SKILLS) {
     const isAmbiguous = AMBIGUOUS_SKILLS.has(skill);
     const searchIn = isAmbiguous ? skillsSection : fullText;
@@ -221,7 +195,6 @@ function extractSkills(fullText: string, sections: Record<string, string>): stri
     }
   }
 
-  // Pass 2: alias scan — look for aliases anywhere in text, resolve to canonical
   const aliasTargets = Object.keys(SKILL_ALIASES);
   for (const alias of aliasTargets) {
     const esc = escRe(alias);
@@ -241,28 +214,19 @@ function extractProjects(sections: Record<string, string>): Project[] {
   const projectsText = sections["projects"] ?? "";
   if (!projectsText.trim()) return [];
 
-  // ── Pre-process: expand inline bullets into separate lines ──────────────────
-  // For single-line PDFs: "Title - Built x - Developed y" → proper lines
-  // Only split on " - " where dash is preceded by a word char and followed by
-  // a capital or known bullet-starter verb, to avoid splitting hyphenated words.
-
   let normalised = projectsText
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
-    // Insert newline before " - Verb" patterns (inline bullets)
     .replace(/[ \t]+-[ \t]+(?=[A-Z])/g, "\n- ");
 
   const lines = normalised.split("\n");
 
-  // ── Title detection ──────────────────────────────────────────────────────────
   function isProjectTitle(line: string): boolean {
     const t = line.trim();
     if (!t || t.length > 150) return false;
     if (!/[A-Z]/.test(t)) return false;
-    // Pure bullet body lines start with action verbs after stripping the bullet
     const stripped = t.replace(/^[•●◆▸▹\-\*\d]+\.?\s*/, "");
     if (BULLET_VERBS.test(stripped)) return false;
-    // URLs are not titles
     if (/^https?:\//i.test(t)) return false;
     const wordCount = t.split(/\s+/).length;
     return wordCount >= 1 && wordCount <= 15;
@@ -275,7 +239,6 @@ function extractProjects(sections: Record<string, string>): Project[] {
     const line = rawLine.trim();
     if (!line) continue;
 
-    // Strip leading bullets/numbers
     const strippedLine = line.replace(/^[•●◆▸▹\-\*\d]+\.?\s*/, "").trim();
 
     if (isProjectTitle(strippedLine) && strippedLine.length > 1) {
@@ -299,15 +262,12 @@ function extractProjects(sections: Record<string, string>): Project[] {
 }
 
 function buildProject(rawTitle: string, bodyLines: string[]): Project {
-  // Strip URLs and "link:" patterns from the title
-  // e.g. "E-commerce Website (MERN Stack) link: https://..." → "E-commerce Website (MERN Stack)"
   const cleanTitle = rawTitle
     .replace(/link\s*:?\s*https?:\/\/\S+/gi, "")
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 
-  // Handle inline "Title — description" / "Title: desc" separator
   const inlineSep = /^(.+?)\s*[—–]\s+(.+)$/;
   let name = cleanTitle;
   let inlineDesc = "";
@@ -317,7 +277,6 @@ function buildProject(rawTitle: string, bodyLines: string[]): Project {
     inlineDesc = sepMatch[2].trim();
   }
 
-  // Strip bullet markers from body lines, remove bare URLs
   const cleanBody = bodyLines
     .map((l) => l.replace(/^[•●◆▸▹\-\*]\s*/, "").replace(/https?:\/\/\S+/g, "").trim())
     .filter(Boolean);
@@ -357,46 +316,120 @@ function buildProject(rawTitle: string, bodyLines: string[]): Project {
 
 // ─── Education ────────────────────────────────────────────────────────────────
 
-function extractEducation(sections: Record<string, string>, fullText: string): Education[] {
-  const searchText = sections["education"] || fullText;
+/**
+ * Matches institution names that contain a school keyword.
+ * Used for institution detection ONLY — NOT applied to the degree string itself
+ * (it over-greedily matches field names like "Engineering in Computer Science").
+ */
+const INST_RE = /([A-Z][a-zA-Z\s.'&-]{1,60}(?:College|University|Institute|School|Academy|Polytechnic|Institution)[a-zA-Z\s.,'()-]{0,40})/;
+
+function toEduLines(text: string): string[] {
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+    .split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+/**
+ * Core education scanner.
+ *
+ * Key design decisions:
+ * - Slices from the degree KEYWORD position → drops any prefix text (name, bullets).
+ * - Strips "Expected Graduation: AUG/2028" as a whole phrase (not just the year).
+ * - Strips the exact known institution string from the degree text instead of
+ *   running INST_RE globally (which would eat "Engineering in Computer Science"
+ *   because it greedily matches from "Engineering" → "College").
+ * - requireInstitution=true (fallback mode): only accepts lines where an
+ *   institution keyword is also present in the 3-line window.
+ */
+function scanEducationLines(lines: string[], requireInstitution: boolean): Education[] {
+  const primary = DEGREE_KEYWORDS.filter((k) => !/diploma/i.test(k));
+  // No \b — works on dot-abbreviations like B.Tech, M.E., Ph.D
+  const degreeRe  = new RegExp(`(?<![A-Za-z])(${primary.join("|")})(?![A-Za-z])`, "i");
+  const diplomaRe = /(?<![A-Za-z])Diploma(?![A-Za-z])/i;
+
   const results: Education[] = [];
+  const seenInstitutions = new Set<string>();
 
-  const degreePattern = new RegExp(
-    `(${DEGREE_KEYWORDS.join("|")})[^\n]{0,150}`,
-    "gi"
-  );
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const isDiploma = diplomaRe.test(line);
+    if (!degreeRe.test(line) && !isDiploma) continue;
 
-  for (const m of searchText.matchAll(degreePattern)) {
-    const chunk = m[0].trim();
+    // 3-line window for institution + year lookup
+    const win = lines.slice(i, i + 3).join(" ");
 
-    // Year: 4-digit 19xx or 20xx
-    const yearMatch = chunk.match(/\b(19|20)\d{2}\b/);
-    const year = yearMatch ? yearMatch[0] : "";
-
-    // Degree: clean up the matched text
-    const degree = chunk
-      .replace(/(?:expected\s+)?graduation\s*:?\s*/gi, "")
-      .replace(/\b(19|20)\d{2}\b/g, "")
-      .replace(/[|,].*$/, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 100);
-
-    // Institution: look ahead for College / University / Institute / School
-    const after = searchText.slice(m.index ?? 0, (m.index ?? 0) + 300);
-    const instMatch = after.match(
-      /([A-Z][a-zA-Z\s.']+(?:College|University|Institute|School|Academy|Institution)[a-zA-Z\s.,']*)/
-    );
+    // ── Institution (detected from window, not from the degree line alone) ──────
+    const instMatch = win.match(INST_RE);
     const institution = instMatch
       ? instMatch[1].replace(/\s+/g, " ").trim().slice(0, 120)
       : "";
 
-    if (degree.length > 3) {
-      results.push({ degree, institution, year });
+    // Fallback mode: skip if no institution keyword in vicinity
+    if (requireInstitution && !institution) { i += 2; continue; }
+
+    // Diploma must have an associated institution (avoids online cert lines)
+    if (isDiploma && !degreeRe.test(line) && !institution) continue;
+
+    // ── Deduplication ─────────────────────────────────────────────────────────
+    const instKey = institution.toLowerCase().slice(0, 40);
+    if (instKey && seenInstitutions.has(instKey)) { i += 2; continue; }
+    if (instKey) seenInstitutions.add(instKey);
+
+    // ── Year (from window) ────────────────────────────────────────────────────
+    const yearMatch = win.match(/\b(19|20)\d{2}\b/);
+    const year = yearMatch ? yearMatch[0] : "";
+
+    // ── Degree text ───────────────────────────────────────────────────────────
+    // Start at the keyword position — discards any prefix text (name, page #).
+    const degreeMatch = degreeRe.exec(line) ?? diplomaRe.exec(line);
+    let degree = degreeMatch ? line.slice(degreeMatch.index) : line;
+
+    // 1. Year ranges first (e.g. "2020-2024") so we don't leave orphan dashes.
+    degree = degree.replace(/\b(19|20)\d{2}\s*[-\u2013\u2014]\s*(19|20)\d{2}\b/g, "");
+    // 2. "Expected Graduation: AUG/2028" — strip phrase AND its attached date token.
+    degree = degree.replace(/(?:expected\s+)?graduation\s*[:\s]\s*\S*/gi, "");
+    // 3. Remaining standalone years.
+    degree = degree.replace(/\b(19|20)\d{2}\b/g, "");
+    // 4. Orphan "MON/" leftovers (e.g. "AUG/" after "2028" was stripped).
+    degree = degree.replace(/\b[A-Z]{2,4}\/\s*/g, "");
+    // 5. Pipe — everything after is noise.
+    degree = degree.replace(/[|].*$/, "");
+    // 6. Score / grade noise.
+    degree = degree.replace(/\bCGPA\b.*$/i, "");
+    degree = degree.replace(/\bGPA\b.*$/i, "");
+    degree = degree.replace(/\d+\.\d+\s*\/\s*\d+.*$/, "");   // 8.5/10
+    degree = degree.replace(/\d+\s*%.*$/, "");               // 85%
+    // 7. Strip the EXACT institution string we already found.
+    //    Do NOT run INST_RE here — it greedily matches from "Engineering in
+    //    Computer Science" all the way to the school name, leaving only "Bachelor of".
+    if (institution) {
+      const instEsc = institution.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      degree = degree.replace(new RegExp(instEsc, "i"), "");
     }
+    // 8. Lone page numbers (e.g. "2" from PDF footer).
+    degree = degree.replace(/\s+\d{1,2}\s*$/, "");
+    // 9. Trailing separators / whitespace.
+    degree = degree.replace(/[|,\-\u2013\u2014\s]+$/, "");
+    degree = degree.replace(/\s+/g, " ").trim().slice(0, 100);
+
+    if (degree.length < 3) { i += 2; continue; }
+
+    results.push({ degree, institution, year });
+    i += 2;
   }
 
-  return results.slice(0, 4);
+  return results;
+}
+
+function extractEducation(sections: Record<string, string>, fullText: string): Education[] {
+  // Primary: dedicated education section
+  const eduSection = sections["education"];
+  if (eduSection && eduSection.trim()) {
+    const found = scanEducationLines(toEduLines(eduSection), false);
+    if (found.length > 0) return found.slice(0, 4);
+  }
+
+  // Fallback: full text, but only lines that also have an institution nearby
+  return scanEducationLines(toEduLines(fullText), true).slice(0, 4);
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────

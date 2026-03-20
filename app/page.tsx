@@ -597,26 +597,20 @@ function ProfileView({ data, onReset }: { data: ParsedResume; onReset: () => voi
                       borderRadius: "3px 0 0 3px",
                     }} />
                     <div style={{ paddingLeft: "0.75rem" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "0.5rem" }}>
-                        <h3 style={{ fontWeight: 700, fontSize: "1.05rem", color: "var(--text-primary)", flex: 1 }}>
-                          {edu.degree}
-                        </h3>
-                        {edu.year && (
-                          <span style={{
-                            fontSize: "0.78rem", color: "#c4b5fd", fontWeight: 700,
-                            background: "rgba(124,111,247,0.15)", border: "1px solid rgba(124,111,247,0.3)",
-                            padding: "0.2rem 0.7rem", borderRadius: "100px", whiteSpace: "nowrap",
-                          }}>
-                            🎓 {edu.year}
-                          </span>
-                        )}
-                      </div>
-                      {edu.institution && (
-                        <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", marginTop: "0.4rem" }}>
-                          🏛️ {edu.institution}
-                        </p>
-                      )}
-                    </div>
+                       <h3 style={{ fontWeight: 700, fontSize: "1.05rem", color: "var(--text-primary)", marginBottom: "0.35rem" }}>
+                         {edu.degree}
+                         {edu.year && (
+                           <span style={{ fontWeight: 500, color: "#a78bfa", fontSize: "0.9rem", marginLeft: "0.45rem" }}>
+                             ({edu.year})
+                           </span>
+                         )}
+                       </h3>
+                       {edu.institution && (
+                         <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", margin: 0 }}>
+                           🏛️ {edu.institution}
+                         </p>
+                       )}
+                     </div>
                   </div>
                 ))}
               </div>
