@@ -334,10 +334,11 @@ export default function Dashboard() {
     try {
       await saveToFirestore(lastParsed.current);
       setSavedAt(new Date().toISOString());
-    } catch {
-      setSaveWarning(
-        "Still blocked. Please disable your ad blocker for this page (localhost) and try again."
-      );
+    } catch (err) {
+      const code = (err as { code?: string })?.code ?? "unknown";
+      const msg = (err as Error)?.message ?? "unknown error";
+      console.error("[Firestore retry]:", err);
+      setSaveWarning(`Save failed (${code}): ${msg}`);
     } finally {
       setRetrying(false);
     }
@@ -379,9 +380,11 @@ export default function Dashboard() {
       try {
         await saveToFirestore(parsed);
         setSavedAt(new Date().toISOString());
-      } catch {
-        // Likely blocked by an ad blocker — profile still shows fine
-        setSaveWarning("blocked");
+      } catch (err) {
+        const code = (err as { code?: string })?.code ?? "unknown";
+        const msg = (err as Error)?.message ?? "unknown error";
+        console.error("[Firestore save]:", err);
+        setSaveWarning(`Save failed (${code}): ${msg}`);
       }
     }
   }
