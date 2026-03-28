@@ -2,7 +2,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
-import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import { parseResumeText, ParsedResume } from "../lib/resumeParser";
@@ -68,7 +68,17 @@ function categoriseSkills(skills: string[]) {
 }
 
 // ─── Upload Zone ──────────────────────────────────────────────────────────────
-function UploadZone({ onFile, loading }: { onFile: (f: File) => void; loading: boolean }) {
+function UploadZone({
+  onFile,
+  loading,
+  isEdit,
+  onCancelEdit,
+}: {
+  onFile: (f: File) => void;
+  loading: boolean;
+  isEdit?: boolean;
+  onCancelEdit?: () => void;
+}) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -80,15 +90,39 @@ function UploadZone({ onFile, loading }: { onFile: (f: File) => void; loading: b
   return (
     <div style={{ animation: "fadeInUp 0.6s ease both" }}>
       <div style={{ textAlign: "center", marginBottom: "2.5rem" }}>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", background: "rgba(124,111,247,0.12)", border: "1px solid rgba(124,111,247,0.3)", borderRadius: "100px", padding: "0.35rem 1rem", marginBottom: "1.5rem", fontSize: "0.8rem", color: "#c4b5fd", letterSpacing: "0.08em", fontWeight: 500 }}>
+        {isEdit && onCancelEdit && (
+          <button
+            onClick={onCancelEdit}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "0.5rem",
+              background: "rgba(255,255,255,0.05)", border: "1px solid var(--border-subtle)",
+              color: "var(--text-secondary)", padding: "0.5rem 1.1rem",
+              borderRadius: "100px", cursor: "pointer", fontSize: "0.875rem",
+              fontWeight: 500, transition: "all 0.2s", marginBottom: "1.5rem",
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(124,111,247,0.15)"; (e.currentTarget as HTMLButtonElement).style.color = "#c4b5fd"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.05)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; }}
+          >
+            ← Back to Profile
+          </button>
+        )}
+        {!isEdit && <div style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", background: "rgba(124,111,247,0.12)", border: "1px solid rgba(124,111,247,0.3)", borderRadius: "100px", padding: "0.35rem 1rem", marginBottom: "1.5rem", fontSize: "0.8rem", color: "#c4b5fd", letterSpacing: "0.08em", fontWeight: 500 }}>
           <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: "pulse-glow 2s ease-in-out infinite" }} />
           AI-Powered Resume Parsing
-        </div>
+        </div>}
+        {isEdit && (
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: "100px", padding: "0.35rem 1rem", marginBottom: "1.5rem", fontSize: "0.8rem", color: "#fde68a", letterSpacing: "0.08em", fontWeight: 500 }}>
+            <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#fbbf24", animation: "pulse-glow 2s ease-in-out infinite" }} />
+            Updating your resume — this will replace your current profile
+          </div>
+        )}
         <h2 style={{ fontSize: "clamp(1.8rem, 4vw, 2.8rem)", fontWeight: 800, lineHeight: 1.1, letterSpacing: "-0.03em", marginBottom: "1rem", background: "linear-gradient(135deg, #f0f0ff 0%, #c4b5fd 50%, #67e8f9 100%)", backgroundSize: "200% auto", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text", animation: "gradient-shift 4s ease infinite" }}>
-          Upload Your Resume
+          {isEdit ? "Update Your Resume" : "Upload Your Resume"}
         </h2>
         <p style={{ color: "var(--text-secondary)", fontSize: "1.05rem", maxWidth: 480, margin: "0 auto" }}>
-          Drop your PDF or text resume below — we&apos;ll parse and save your profile automatically.
+          {isEdit
+            ? "Upload a new resume to replace your current profile data."
+            : "Drop your PDF or text resume below — we'll parse and save your profile automatically."}
         </p>
       </div>
 
@@ -109,7 +143,7 @@ function UploadZone({ onFile, loading }: { onFile: (f: File) => void; loading: b
         {loading ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1.25rem" }}>
             <div style={{ width: 56, height: 56, borderRadius: "50%", border: "3px solid rgba(124,111,247,0.2)", borderTopColor: "#7c6ff7", animation: "spin-slow 0.8s linear infinite" }} />
-            <p style={{ color: "var(--text-secondary)", fontWeight: 500 }}>Parsing & saving your resume…</p>
+            <p style={{ color: "var(--text-secondary)", fontWeight: 500 }}>Parsing &amp; saving your resume…</p>
           </div>
         ) : (
           <>
@@ -139,26 +173,48 @@ function EmptyState({ icon, message }: { icon: string; message: string }) {
 }
 
 // ─── Profile View ─────────────────────────────────────────────────────────────
-function ProfileView({ data, onReset, savedAt }: { data: ParsedResume; onReset: () => void; savedAt: string | null }) {
+function ProfileView({
+  data,
+  onEditResume,
+  savedAt,
+}: {
+  data: ParsedResume;
+  onEditResume: () => void;
+  savedAt: string | null;
+}) {
   const skillCategories = categoriseSkills(data.skills);
   const [activeTab, setActiveTab] = useState<"skills" | "projects" | "education">("skills");
 
   return (
     <div style={{ animation: "fadeIn 0.5s ease both" }}>
+      {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "1rem", marginBottom: "2rem" }}>
-        <button
-          onClick={onReset}
-          style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border-subtle)", color: "var(--text-secondary)", padding: "0.5rem 1.1rem", borderRadius: "100px", cursor: "pointer", fontSize: "0.875rem", fontWeight: 500, transition: "all 0.2s" }}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(124,111,247,0.15)"; (e.currentTarget as HTMLButtonElement).style.color = "#c4b5fd"; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.05)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; }}
-        >
-          ← Upload another
-        </button>
-        {savedAt && (
-          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.8rem", color: "#86efac", background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)", padding: "0.35rem 0.85rem", borderRadius: "100px" }}>
-            ✅ Saved to your account
-          </div>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+          <span style={{ fontSize: "1.3rem" }}>👤</span>
+          <span style={{ fontWeight: 700, fontSize: "1.1rem", background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>My Profile</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+          {savedAt && (
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.8rem", color: "#86efac", background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)", padding: "0.35rem 0.85rem", borderRadius: "100px" }}>
+              ✅ Saved to your account
+            </div>
+          )}
+          <button
+            id="edit-resume-btn"
+            onClick={onEditResume}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "0.5rem",
+              background: "rgba(124,111,247,0.12)", border: "1px solid rgba(124,111,247,0.3)",
+              color: "#c4b5fd", padding: "0.5rem 1.1rem",
+              borderRadius: "100px", cursor: "pointer", fontSize: "0.875rem",
+              fontWeight: 600, transition: "all 0.2s",
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(124,111,247,0.25)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 0 20px rgba(124,111,247,0.2)"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(124,111,247,0.12)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "none"; }}
+          >
+            ✏️ Edit Resume
+          </button>
+        </div>
       </div>
 
       <div style={{ display: "grid", gap: "1.5rem" }}>
@@ -288,17 +344,21 @@ function ProfileView({ data, onReset, savedAt }: { data: ParsedResume; onReset: 
 export default function Dashboard() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
-  const [loading, setLoading] = useState(false);
+
+  // UI state
+  const [appLoading, setAppLoading] = useState(true);   // loading existing Firestore data
+  const [uploadLoading, setUploadLoading] = useState(false); // uploading/parsing a new file
   const [retrying, setRetrying] = useState(false);
   const [profile, setProfile] = useState<ParsedResume | null>(null);
+  const [isEditing, setIsEditing] = useState(false);     // true when user clicked "Edit Resume"
   const [error, setError] = useState<string | null>(null);
   const [saveWarning, setSaveWarning] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
-  // Keep a ref to the last parsed resume so we can retry saving without re-upload
+
   const lastParsed = useRef<ParsedResume | null>(null);
 
-  // ─── Firestore save helper (reusable for retry) ───────────────────────────
+  // ─── Firestore save helper ───────────────────────────────────────────────────
   const saveToFirestore = useCallback(async (parsed: ParsedResume) => {
     if (!user) return;
     const docRef = doc(db, "User", user.uid);
@@ -326,7 +386,49 @@ export default function Dashboard() {
     }, { merge: true });
   }, [user]);
 
-  // ─── Retry save (after user disables ad blocker) ────────────────────────────
+  // ─── Load existing profile from Firestore on login ───────────────────────────
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) { router.replace("/auth?mode=login"); return; }
+
+    async function loadProfile() {
+      setAppLoading(true);
+      try {
+        const docRef = doc(db, "User", user!.uid);
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          const data = snap.data();
+          const r = data.resume;
+          if (r) {
+            const parsed: ParsedResume = {
+              name: r.name ?? "",
+              email: r.email ?? "",
+              phone: r.phone ?? "",
+              location: r.location ?? "",
+              linkedin: r.linkedin ?? "",
+              github: r.github ?? "",
+              summary: r.summary ?? "",
+              rawText: "",
+              skills: r.skills ?? [],
+              projects: r.projects ?? [],
+              education: r.education ?? [],
+            };
+            setProfile(parsed);
+            setSavedAt(data.updatedAt?.toDate?.().toISOString() ?? new Date().toISOString());
+          }
+        }
+      } catch (err) {
+        console.error("[Firestore load]:", err);
+        // Non-fatal — just show upload zone
+      } finally {
+        setAppLoading(false);
+      }
+    }
+
+    loadProfile();
+  }, [user, authLoading, router]);
+
+  // ─── Retry save ───────────────────────────────────────────────────────────────
   async function retrySave() {
     if (!lastParsed.current) return;
     setRetrying(true);
@@ -344,21 +446,13 @@ export default function Dashboard() {
     }
   }
 
-  // Protect route
-  useEffect(() => {
-    if (!authLoading && !user) {
-      router.replace("/auth?mode=login");
-    }
-  }, [user, authLoading, router]);
-
+  // ─── Handle new file upload ────────────────────────────────────────────────
   async function handleFile(file: File) {
     setError(null);
     setSaveWarning(null);
     setSavedAt(null);
-    setLoading(true);
-    setProfile(null);
+    setUploadLoading(true);
 
-    // ── Step 1: Parse the resume (fatal if this fails) ──
     let parsed;
     try {
       const text = await extractText(file);
@@ -367,15 +461,15 @@ export default function Dashboard() {
       parsed = parseResumeText(text);
       lastParsed.current = parsed;
       setProfile(parsed);
+      setIsEditing(false); // return to profile view
     } catch (err) {
       setError((err as Error).message ?? "Something went wrong while parsing.");
-      setLoading(false);
+      setUploadLoading(false);
       return;
     } finally {
-      setLoading(false);
+      setUploadLoading(false);
     }
 
-    // ── Step 2: Save to Firestore (non-fatal — show warning if blocked) ──
     if (user && parsed) {
       try {
         await saveToFirestore(parsed);
@@ -395,13 +489,21 @@ export default function Dashboard() {
     router.push("/");
   }
 
-  if (authLoading) {
+  // ─── Loading states ───────────────────────────────────────────────────────
+  if (authLoading || appLoading) {
     return (
-      <div style={{ minHeight: "100vh", background: "var(--bg-primary)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ minHeight: "100vh", background: "var(--bg-primary)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "1rem" }}>
         <div style={{ width: 48, height: 48, borderRadius: "50%", border: "3px solid rgba(124,111,247,0.2)", borderTopColor: "#7c6ff7", animation: "spin-slow 0.8s linear infinite" }} />
+        {appLoading && !authLoading && (
+          <p style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>Loading your profile…</p>
+        )}
       </div>
     );
   }
+
+  // ─── Determine what to show in main ─────────────────────────────────────
+  // Show upload zone if: no profile yet, OR user clicked "Edit Resume"
+  const showUpload = !profile || isEditing;
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg-primary)", position: "relative", overflowX: "hidden" }}>
@@ -417,6 +519,34 @@ export default function Dashboard() {
           <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: "8px", background: "linear-gradient(135deg, #7c6ff7, #22d3ee)", fontSize: "1rem" }}>📄</span>
           <span style={{ background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>ResumeAI</span>
         </div>
+
+        {/* Nav tabs */}
+        {profile && (
+          <div style={{ display: "flex", gap: "0.25rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-subtle)", borderRadius: "100px", padding: "0.25rem" }}>
+            <button
+              onClick={() => setIsEditing(false)}
+              style={{
+                padding: "0.4rem 1.1rem", borderRadius: "100px", border: "none", cursor: "pointer",
+                fontWeight: 600, fontSize: "0.82rem", transition: "all 0.2s",
+                background: !isEditing ? "linear-gradient(135deg, #7c6ff7, #a78bfa)" : "transparent",
+                color: !isEditing ? "#fff" : "var(--text-secondary)",
+              }}
+            >
+              👤 Profile
+            </button>
+            <button
+              onClick={() => setIsEditing(true)}
+              style={{
+                padding: "0.4rem 1.1rem", borderRadius: "100px", border: "none", cursor: "pointer",
+                fontWeight: 600, fontSize: "0.82rem", transition: "all 0.2s",
+                background: isEditing ? "linear-gradient(135deg, #7c6ff7, #a78bfa)" : "transparent",
+                color: isEditing ? "#fff" : "var(--text-secondary)",
+              }}
+            >
+              ✏️ Edit Resume
+            </button>
+          </div>
+        )}
 
         {/* User info + sign out */}
         {user && (
@@ -453,16 +583,16 @@ export default function Dashboard() {
             <button onClick={() => setError(null)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#fca5a5", cursor: "pointer", fontSize: "1rem" }}>✕</button>
           </div>
         )}
-        {/* Non-fatal save warning (ad blocker / network) */}
+        {/* Non-fatal save warning */}
         {saveWarning && (
           <div style={{ background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.3)", color: "#fde68a", borderRadius: "1rem", padding: "1rem 1.25rem", marginBottom: "2rem", fontSize: "0.875rem", display: "flex", alignItems: "flex-start", gap: "0.75rem", flexWrap: "wrap" }}>
             <span style={{ fontSize: "1.2rem", flexShrink: 0 }}>🛡️</span>
             <div style={{ flex: 1, minWidth: 200 }}>
               <p style={{ marginBottom: "0.5rem" }}>
-                <strong>Cloud save was blocked</strong> — your ad blocker is intercepting Firestore requests.
+                <strong>Cloud save was blocked</strong> — your ad blocker may be intercepting Firestore requests.
               </p>
               <p style={{ color: "rgba(253,230,138,0.75)", fontSize: "0.82rem", lineHeight: 1.6 }}>
-                To fix: open your ad blocker and <strong>allowlist <code style={{ background: "rgba(251,191,36,0.15)", padding: "0.1rem 0.3rem", borderRadius: 4 }}>localhost</code></strong> (or disable it for this tab), then click Retry.
+                To fix: allowlist <code style={{ background: "rgba(251,191,36,0.15)", padding: "0.1rem 0.3rem", borderRadius: 4 }}>localhost</code> in your ad blocker, then click Retry.
               </p>
             </div>
             <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexShrink: 0 }}>
@@ -480,10 +610,21 @@ export default function Dashboard() {
             </div>
           </div>
         )}
-        {profile ? (
-          <ProfileView data={profile} onReset={() => { setProfile(null); setSavedAt(null); setSaveWarning(null); }} savedAt={savedAt} />
+
+        {/* Main view */}
+        {showUpload ? (
+          <UploadZone
+            onFile={handleFile}
+            loading={uploadLoading}
+            isEdit={isEditing && !!profile}
+            onCancelEdit={() => setIsEditing(false)}
+          />
         ) : (
-          <UploadZone onFile={handleFile} loading={loading} />
+          <ProfileView
+            data={profile!}
+            onEditResume={() => setIsEditing(true)}
+            savedAt={savedAt}
+          />
         )}
       </main>
 
