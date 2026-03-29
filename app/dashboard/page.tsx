@@ -6,481 +6,861 @@ import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import { parseResumeText, ParsedResume } from "../lib/resumeParser";
+import { parseJobDescription, ParsedJobDescription } from "../lib/jobDescriptionParser";
 
-// ─── PDF.js helper ─────────────────────────────────────────────────────────────
+// ─── PDF Extraction ────────────────────────────────────────────────────────────
 async function extractTextFromPDF(file: File): Promise<string> {
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
-  const textParts: string[] = [];
+  const ab = await file.arrayBuffer();
+  const pdf = await pdfjs.getDocument({ data: ab }).promise;
+  const parts: string[] = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    const pageText = content.items
-      .map((item: unknown) => { const i = item as { str?: string }; return i.str ?? ""; })
-      .join(" ");
-    textParts.push(pageText);
+    parts.push(content.items.map((it: unknown) => (it as { str?: string }).str ?? "").join(" "));
   }
-  return textParts.join("\n");
+  return parts.join("\n");
 }
 
 async function extractText(file: File): Promise<string> {
   if (file.type === "application/pdf") return extractTextFromPDF(file);
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsText(file);
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result as string);
+    r.onerror = rej;
+    r.readAsText(file);
   });
+}
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
+interface Message {
+  id: string;
+  role: "user" | "ai";
+  content: string;
+  timestamp: Date;
+}
+
+interface MockSession {
+  id: string;
+  title: string;
+  company: string;
+  role: string;
+  createdAt: Date;
+  messages: Message[];
+  jd: ParsedJobDescription | null;
 }
 
 // ─── Colour helpers ────────────────────────────────────────────────────────────
 const TAG_COLOURS = [
   { bg: "rgba(124,111,247,0.18)", border: "rgba(124,111,247,0.4)", text: "#c4b5fd" },
-  { bg: "rgba(34,211,238,0.14)", border: "rgba(34,211,238,0.35)", text: "#67e8f9" },
+  { bg: "rgba(34,211,238,0.14)",  border: "rgba(34,211,238,0.35)",  text: "#67e8f9" },
   { bg: "rgba(244,114,182,0.14)", border: "rgba(244,114,182,0.35)", text: "#f9a8d4" },
-  { bg: "rgba(74,222,128,0.14)", border: "rgba(74,222,128,0.35)", text: "#86efac" },
-  { bg: "rgba(251,191,36,0.14)", border: "rgba(251,191,36,0.35)", text: "#fde68a" },
+  { bg: "rgba(74,222,128,0.14)",  border: "rgba(74,222,128,0.35)",  text: "#86efac" },
+  { bg: "rgba(251,191,36,0.14)",  border: "rgba(251,191,36,0.35)",  text: "#fde68a" },
 ];
-function tagColour(idx: number) { return TAG_COLOURS[idx % TAG_COLOURS.length]; }
+function tagColour(i: number) { return TAG_COLOURS[i % TAG_COLOURS.length]; }
 function initials(name: string) {
-  return name.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? "").join("");
+  return name.split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? "").join("");
 }
+
+// ─── Skill categories (for profile panel) ─────────────────────────────────────
 function categoriseSkills(skills: string[]) {
-  const cats: Record<string, string[]> = { "Languages": [], "Frontend": [], "Backend": [], "Databases": [], "Cloud & DevOps": [], "AI / ML": [], "Tools": [] };
-  const LANG = new Set(["JavaScript","TypeScript","Python","Java","C++","C#","C","Go","Rust","Swift","Kotlin","Ruby","PHP","Scala","R","MATLAB","Dart","Lua","Perl","Bash","Shell"]);
-  const FE = new Set(["React","Next.js","Vue","Vue.js","Angular","Svelte","HTML","HTML5","CSS","CSS3","Sass","SCSS","Tailwind","TailwindCSS","Bootstrap","jQuery","Redux","Zustand","Vite","Webpack","Babel"]);
-  const BE = new Set(["Node.js","Express","FastAPI","Django","Flask","Spring","Spring Boot","Laravel","Rails","NestJS","Hono","Bun","Deno"]);
-  const DB = new Set(["MongoDB","PostgreSQL","MySQL","SQLite","Redis","Firebase","Supabase","DynamoDB","Cassandra","Prisma","Mongoose","SQL","NoSQL"]);
+  const LANG  = new Set(["JavaScript","TypeScript","Python","Java","C++","C#","C","Go","Rust","Swift","Kotlin","Ruby","PHP","Scala","R","MATLAB","Dart","Lua","Perl","Bash","Shell"]);
+  const FE    = new Set(["React","Next.js","Vue","Vue.js","Angular","Svelte","HTML","HTML5","CSS","CSS3","Sass","SCSS","Tailwind","TailwindCSS","Bootstrap","jQuery","Redux","Zustand","Vite","Webpack","Babel"]);
+  const BE    = new Set(["Node.js","Express","FastAPI","Django","Flask","Spring","Spring Boot","Laravel","Rails","NestJS","Hono","Bun","Deno"]);
+  const DB    = new Set(["MongoDB","PostgreSQL","MySQL","SQLite","Redis","Firebase","Supabase","DynamoDB","Cassandra","Prisma","Mongoose","SQL","NoSQL"]);
   const CLOUD = new Set(["AWS","GCP","Azure","Docker","Kubernetes","CI/CD","GitHub Actions","Vercel","Netlify","Heroku","Linux","Nginx","Apache","Terraform","Ansible"]);
-  const AI = new Set(["TensorFlow","PyTorch","Keras","scikit-learn","Pandas","NumPy","OpenCV","Hugging Face","LangChain","OpenAI","LLM","NLP","Machine Learning","Deep Learning","Computer Vision"]);
-  for (const skill of skills) {
-    if (LANG.has(skill)) cats["Languages"].push(skill);
-    else if (FE.has(skill)) cats["Frontend"].push(skill);
-    else if (BE.has(skill)) cats["Backend"].push(skill);
-    else if (DB.has(skill)) cats["Databases"].push(skill);
-    else if (CLOUD.has(skill)) cats["Cloud & DevOps"].push(skill);
-    else if (AI.has(skill)) cats["AI / ML"].push(skill);
-    else cats["Tools"].push(skill);
+  const AI    = new Set(["TensorFlow","PyTorch","Keras","scikit-learn","Pandas","NumPy","OpenCV","Hugging Face","LangChain","OpenAI","LLM","NLP","Machine Learning","Deep Learning","Computer Vision"]);
+  const cats: Record<string,string[]> = { Languages:[], Frontend:[], Backend:[], Databases:[], "Cloud & DevOps":[], "AI / ML":[], Tools:[] };
+  for (const s of skills) {
+    if      (LANG.has(s))  cats.Languages.push(s);
+    else if (FE.has(s))    cats.Frontend.push(s);
+    else if (BE.has(s))    cats.Backend.push(s);
+    else if (DB.has(s))    cats.Databases.push(s);
+    else if (CLOUD.has(s)) cats["Cloud & DevOps"].push(s);
+    else if (AI.has(s))    cats["AI / ML"].push(s);
+    else                   cats.Tools.push(s);
   }
-  return Object.entries(cats).filter(([, v]) => v.length > 0);
+  return Object.entries(cats).filter(([,v]) => v.length > 0);
 }
 
-// ─── Upload Zone ──────────────────────────────────────────────────────────────
-function UploadZone({
-  onFile,
-  loading,
-  isEdit,
-  onCancelEdit,
+// ─── Real Gemini API call ─────────────────────────────────────────────────────
+async function callGemini({
+  history,
+  userMessage,
+  jd,
+  resumeSkills,
+  resumeName,
 }: {
-  onFile: (f: File) => void;
-  loading: boolean;
-  isEdit?: boolean;
-  onCancelEdit?: () => void;
-}) {
-  const [dragging, setDragging] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); setDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) onFile(file);
-  }, [onFile]);
+  history: { role: "user" | "model"; text: string }[];
+  userMessage: string;
+  jd: ParsedJobDescription | null;
+  resumeSkills: string[];
+  resumeName: string;
+}): Promise<string> {
+  const res = await fetch("/api/interview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ history, userMessage, jd, resumeSkills, resumeName }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error ?? `API error ${res.status}`);
+  }
+  const data = await res.json();
+  return data.text as string;
+}
 
+// ──────────────────────────────────────────────────────────────────────────────
+// LEFT SIDEBAR
+// ──────────────────────────────────────────────────────────────────────────────
+function LeftSidebar({
+  sessions,
+  activeId,
+  onSelect,
+  onNew,
+}: {
+  sessions: MockSession[];
+  activeId: string | null;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+}) {
   return (
-    <div style={{ animation: "fadeInUp 0.6s ease both" }}>
-      <div style={{ textAlign: "center", marginBottom: "2.5rem" }}>
-        {isEdit && onCancelEdit && (
-          <button
-            onClick={onCancelEdit}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: "0.5rem",
-              background: "rgba(255,255,255,0.05)", border: "1px solid var(--border-subtle)",
-              color: "var(--text-secondary)", padding: "0.5rem 1.1rem",
-              borderRadius: "100px", cursor: "pointer", fontSize: "0.875rem",
-              fontWeight: 500, transition: "all 0.2s", marginBottom: "1.5rem",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(124,111,247,0.15)"; (e.currentTarget as HTMLButtonElement).style.color = "#c4b5fd"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.05)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; }}
-          >
-            ← Back to Profile
-          </button>
-        )}
-        {!isEdit && <div style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", background: "rgba(124,111,247,0.12)", border: "1px solid rgba(124,111,247,0.3)", borderRadius: "100px", padding: "0.35rem 1rem", marginBottom: "1.5rem", fontSize: "0.8rem", color: "#c4b5fd", letterSpacing: "0.08em", fontWeight: 500 }}>
-          <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#a78bfa", animation: "pulse-glow 2s ease-in-out infinite" }} />
-          AI-Powered Resume Parsing
-        </div>}
-        {isEdit && (
-          <div style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: "100px", padding: "0.35rem 1rem", marginBottom: "1.5rem", fontSize: "0.8rem", color: "#fde68a", letterSpacing: "0.08em", fontWeight: 500 }}>
-            <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#fbbf24", animation: "pulse-glow 2s ease-in-out infinite" }} />
-            Updating your resume — this will replace your current profile
-          </div>
-        )}
-        <h2 style={{ fontSize: "clamp(1.8rem, 4vw, 2.8rem)", fontWeight: 800, lineHeight: 1.1, letterSpacing: "-0.03em", marginBottom: "1rem", background: "linear-gradient(135deg, #f0f0ff 0%, #c4b5fd 50%, #67e8f9 100%)", backgroundSize: "200% auto", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text", animation: "gradient-shift 4s ease infinite" }}>
-          {isEdit ? "Update Your Resume" : "Upload Your Resume"}
-        </h2>
-        <p style={{ color: "var(--text-secondary)", fontSize: "1.05rem", maxWidth: 480, margin: "0 auto" }}>
-          {isEdit
-            ? "Upload a new resume to replace your current profile data."
-            : "Drop your PDF or text resume below — we'll parse and save your profile automatically."}
-        </p>
+    <aside style={{
+      width: 260, minWidth: 220, maxWidth: 280,
+      background: "rgba(10,10,16,0.95)",
+      borderRight: "1px solid var(--border-subtle)",
+      display: "flex", flexDirection: "column",
+      height: "100vh", position: "sticky", top: 0, flexShrink: 0,
+    }}>
+      {/* Logo */}
+      <div style={{ padding: "1.25rem 1.25rem 0.75rem", borderBottom: "1px solid var(--border-subtle)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 800, fontSize: "1rem", letterSpacing: "-0.02em" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: "7px", background: "linear-gradient(135deg, #7c6ff7, #22d3ee)", fontSize: "0.85rem" }}>📄</span>
+          <span style={{ background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>ResumeAI</span>
+        </div>
       </div>
 
-      <div
-        onClick={() => !loading && inputRef.current?.click()}
-        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={handleDrop}
-        style={{
-          border: `2px dashed ${dragging ? "#7c6ff7" : "rgba(124,111,247,0.3)"}`,
-          borderRadius: "1.5rem", background: dragging ? "rgba(124,111,247,0.1)" : "rgba(16,16,30,0.6)",
-          padding: "3.5rem 2rem", textAlign: "center", cursor: loading ? "default" : "pointer",
-          transition: "all 0.3s ease", backdropFilter: "blur(12px)",
-          boxShadow: dragging ? "0 0 50px rgba(124,111,247,0.2)" : "none", maxWidth: 580, margin: "0 auto",
-        }}
-      >
-        <input ref={inputRef} type="file" accept=".pdf,.txt,.doc,.docx" style={{ display: "none" }} onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} id="resume-upload" />
-        {loading ? (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1.25rem" }}>
-            <div style={{ width: 56, height: 56, borderRadius: "50%", border: "3px solid rgba(124,111,247,0.2)", borderTopColor: "#7c6ff7", animation: "spin-slow 0.8s linear infinite" }} />
-            <p style={{ color: "var(--text-secondary)", fontWeight: 500 }}>Parsing &amp; saving your resume…</p>
+      {/* New Mock button */}
+      <div style={{ padding: "1rem 1rem 0.5rem" }}>
+        <button
+          id="new-mock-btn"
+          onClick={onNew}
+          style={{
+            width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: "0.5rem", padding: "0.65rem 1rem", borderRadius: "10px",
+            background: "linear-gradient(135deg, rgba(124,111,247,0.25), rgba(34,211,238,0.12))",
+            border: "1px solid rgba(124,111,247,0.35)", color: "#c4b5fd",
+            cursor: "pointer", fontSize: "0.875rem", fontWeight: 700, transition: "all 0.2s",
+          }}
+          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "linear-gradient(135deg, rgba(124,111,247,0.4), rgba(34,211,238,0.2))"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 0 20px rgba(124,111,247,0.2)"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "linear-gradient(135deg, rgba(124,111,247,0.25), rgba(34,211,238,0.12))"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "none"; }}
+        >
+          <span>New mock</span>
+          <span style={{ width: 22, height: 22, borderRadius: "50%", background: "rgba(124,111,247,0.3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.85rem", fontWeight: 900 }}>+</span>
+        </button>
+      </div>
+
+      {/* Session list */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "0.5rem 0.75rem" }}>
+        {sessions.length === 0 ? (
+          <div style={{ padding: "2rem 0.5rem", textAlign: "center" }}>
+            <div style={{ fontSize: "2rem", marginBottom: "0.5rem", opacity: 0.4 }}>💬</div>
+            <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", lineHeight: 1.6 }}>No sessions yet.<br />Start a new mock interview!</p>
           </div>
         ) : (
           <>
-            <div style={{ width: 80, height: 80, borderRadius: "50%", background: "linear-gradient(135deg, rgba(124,111,247,0.2), rgba(34,211,238,0.1))", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 1.5rem", animation: "float 3s ease-in-out infinite", fontSize: "2rem" }}>📄</div>
-            <p style={{ fontWeight: 700, fontSize: "1.15rem", color: "var(--text-primary)", marginBottom: "0.5rem" }}>Drop your resume here</p>
-            <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>or click to browse — PDF, TXT supported</p>
-            <div style={{ display: "inline-flex", gap: "0.5rem" }}>
-              {["PDF", "TXT", "DOC"].map((ext) => (
-                <span key={ext} style={{ padding: "0.25rem 0.75rem", borderRadius: "100px", background: "rgba(124,111,247,0.12)", border: "1px solid rgba(124,111,247,0.25)", fontSize: "0.75rem", color: "#c4b5fd", fontWeight: 600 }}>{ext}</span>
-              ))}
-            </div>
+            <p style={{ fontSize: "0.7rem", fontWeight: 700, letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--text-muted)", padding: "0.5rem 0.5rem 0.25rem" }}>List of chats</p>
+            {sessions.map(s => (
+              <button
+                key={s.id}
+                onClick={() => onSelect(s.id)}
+                style={{
+                  width: "100%", textAlign: "left", padding: "0.75rem 0.85rem",
+                  borderRadius: "10px", border: "1px solid",
+                  borderColor: activeId === s.id ? "rgba(124,111,247,0.4)" : "transparent",
+                  background: activeId === s.id ? "rgba(124,111,247,0.12)" : "transparent",
+                  color: activeId === s.id ? "#c4b5fd" : "var(--text-secondary)",
+                  cursor: "pointer", marginBottom: "0.25rem",
+                  transition: "all 0.15s", display: "block",
+                }}
+                onMouseEnter={e => { if (activeId !== s.id) (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.04)"; }}
+                onMouseLeave={e => { if (activeId !== s.id) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+              >
+                <div style={{ fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginBottom: "0.2rem" }}>
+                  {s.role || s.title || "Mock Interview"}
+                </div>
+                <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {s.company ? `@ ${s.company}` : "No JD attached"} · {s.messages.length} msgs
+                </div>
+              </button>
+            ))}
           </>
         )}
       </div>
-    </div>
+    </aside>
   );
 }
 
-// ─── Empty State ──────────────────────────────────────────────────────────────
-function EmptyState({ icon, message }: { icon: string; message: string }) {
-  return (
-    <div style={{ textAlign: "center", padding: "3rem 1rem", background: "var(--bg-card)", border: "1px solid var(--border-subtle)", borderRadius: "1.25rem" }}>
-      <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>{icon}</div>
-      <p style={{ color: "var(--text-muted)", maxWidth: 360, margin: "0 auto" }}>{message}</p>
-    </div>
-  );
-}
+// ──────────────────────────────────────────────────────────────────────────────
+// JD UPLOAD PANEL (shown at top of center when no JD yet)
+// ──────────────────────────────────────────────────────────────────────────────
+function JDUploadPanel({ onJD }: { onJD: (jd: ParsedJobDescription, raw: string) => void }) {
+  const [tab, setTab] = useState<"paste" | "file">("paste");
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-// ─── Profile View ─────────────────────────────────────────────────────────────
-function ProfileView({
-  data,
-  onEditResume,
-  savedAt,
-}: {
-  data: ParsedResume;
-  onEditResume: () => void;
-  savedAt: string | null;
-}) {
-  const skillCategories = categoriseSkills(data.skills);
-  const [activeTab, setActiveTab] = useState<"skills" | "projects" | "education">("skills");
+  async function handleFile(file: File) {
+    setLoading(true);
+    try {
+      const raw = await extractText(file);
+      const jd = parseJobDescription(raw);
+      onJD(jd, raw);
+    } finally { setLoading(false); }
+  }
+
+  function handlePaste() {
+    if (!text.trim()) return;
+    setLoading(true);
+    setTimeout(() => {
+      const jd = parseJobDescription(text);
+      onJD(jd, text);
+      setLoading(false);
+    }, 400);
+  }
 
   return (
-    <div style={{ animation: "fadeIn 0.5s ease both" }}>
-      {/* Header row */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "1rem", marginBottom: "2rem" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-          <span style={{ fontSize: "1.3rem" }}>👤</span>
-          <span style={{ fontWeight: 700, fontSize: "1.1rem", background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>My Profile</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-          {savedAt && (
-            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.8rem", color: "#86efac", background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.25)", padding: "0.35rem 0.85rem", borderRadius: "100px" }}>
-              ✅ Saved to your account
-            </div>
-          )}
-          <button
-            id="edit-resume-btn"
-            onClick={onEditResume}
-            style={{
-              display: "inline-flex", alignItems: "center", gap: "0.5rem",
-              background: "rgba(124,111,247,0.12)", border: "1px solid rgba(124,111,247,0.3)",
-              color: "#c4b5fd", padding: "0.5rem 1.1rem",
-              borderRadius: "100px", cursor: "pointer", fontSize: "0.875rem",
-              fontWeight: 600, transition: "all 0.2s",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(124,111,247,0.25)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 0 20px rgba(124,111,247,0.2)"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(124,111,247,0.12)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "none"; }}
-          >
-            ✏️ Edit Resume
+    <div style={{
+      background: "linear-gradient(135deg, rgba(124,111,247,0.08), rgba(34,211,238,0.04))",
+      border: "1px solid rgba(124,111,247,0.2)", borderRadius: "1.25rem",
+      padding: "1.5rem", marginBottom: "1rem", animation: "fadeInUp 0.5s ease both",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "1rem" }}>
+        <span style={{ fontSize: "1.1rem" }}>📋</span>
+        <span style={{ fontWeight: 700, fontSize: "0.95rem", color: "var(--text-primary)" }}>Add Job Description</span>
+        <span style={{ marginLeft: "auto", fontSize: "0.72rem", color: "var(--text-muted)", background: "rgba(124,111,247,0.1)", border: "1px solid rgba(124,111,247,0.2)", padding: "0.2rem 0.6rem", borderRadius: "100px" }}>Optional — starts the interview in context</span>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", gap: "0.35rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-subtle)", borderRadius: "100px", padding: "0.25rem", width: "fit-content", marginBottom: "1rem" }}>
+        {(["paste","file"] as const).map(t => (
+          <button key={t} onClick={() => setTab(t)} style={{ padding: "0.35rem 1rem", borderRadius: "100px", border: "none", cursor: "pointer", fontWeight: 600, fontSize: "0.78rem", textTransform: "capitalize", transition: "all 0.2s", background: tab === t ? "linear-gradient(135deg, #7c6ff7, #a78bfa)" : "transparent", color: tab === t ? "#fff" : "var(--text-secondary)" }}>
+            {t === "paste" ? "✏️ Paste text" : "📎 Upload file"}
           </button>
+        ))}
+      </div>
+
+      {tab === "paste" ? (
+        <div>
+          <textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder="Paste the job description here…"
+            style={{
+              width: "100%", minHeight: 100, background: "rgba(255,255,255,0.04)",
+              border: "1px solid var(--border-subtle)", borderRadius: "0.75rem",
+              color: "var(--text-primary)", padding: "0.85rem 1rem", fontSize: "0.85rem",
+              fontFamily: "inherit", resize: "vertical", outline: "none", lineHeight: 1.6,
+              transition: "border-color 0.2s",
+            }}
+            onFocus={e => e.target.style.borderColor = "rgba(124,111,247,0.5)"}
+            onBlur={e => e.target.style.borderColor = "var(--border-subtle)"}
+          />
+          <button
+            onClick={handlePaste}
+            disabled={!text.trim() || loading}
+            style={{
+              marginTop: "0.75rem", padding: "0.55rem 1.5rem", borderRadius: "100px",
+              background: text.trim() ? "linear-gradient(135deg, #7c6ff7, #a78bfa)" : "rgba(255,255,255,0.05)",
+              border: "none", color: text.trim() ? "#fff" : "var(--text-muted)",
+              cursor: text.trim() ? "pointer" : "not-allowed", fontWeight: 700, fontSize: "0.85rem",
+              transition: "all 0.2s", display: "flex", alignItems: "center", gap: "0.5rem",
+            }}
+          >
+            {loading ? <><span style={{ width: 12, height: 12, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", animation: "spin-slow 0.7s linear infinite", display: "inline-block" }} />Parsing…</> : "→ Parse & Start"}
+          </button>
+        </div>
+      ) : (
+        <div
+          onClick={() => !loading && inputRef.current?.click()}
+          onDragOver={e => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={e => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
+          style={{
+            border: `2px dashed ${dragging ? "#7c6ff7" : "rgba(124,111,247,0.25)"}`,
+            borderRadius: "0.75rem", padding: "1.75rem 1rem", textAlign: "center",
+            cursor: loading ? "default" : "pointer", transition: "all 0.25s",
+            background: dragging ? "rgba(124,111,247,0.08)" : "transparent",
+          }}
+        >
+          <input ref={inputRef} type="file" accept=".pdf,.txt,.doc,.docx" style={{ display: "none" }} onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
+          {loading ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem" }}>
+              <span style={{ width: 18, height: 18, borderRadius: "50%", border: "2px solid rgba(124,111,247,0.2)", borderTopColor: "#7c6ff7", animation: "spin-slow 0.8s linear infinite", display: "inline-block" }} />
+              <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Parsing JD…</span>
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: "1.5rem", marginBottom: "0.4rem" }}>📄</div>
+              <p style={{ color: "var(--text-secondary)", fontSize: "0.82rem" }}>Drop your JD file or <span style={{ color: "#c4b5fd", fontWeight: 600 }}>click to browse</span></p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// JD SUMMARY CHIP (compact header once JD is parsed)
+// ──────────────────────────────────────────────────────────────────────────────
+function JDChip({ jd, onClear }: { jd: ParsedJobDescription; onClear: () => void }) {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap",
+      background: "rgba(34,211,238,0.07)", border: "1px solid rgba(34,211,238,0.2)",
+      borderRadius: "0.85rem", padding: "0.65rem 1rem", marginBottom: "1rem",
+      animation: "fadeInUp 0.4s ease both",
+    }}>
+      <span style={{ fontSize: "1rem" }}>📋</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ fontWeight: 700, fontSize: "0.875rem", color: "#67e8f9" }}>{jd.title || "Role"}</span>
+        {jd.company && <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}> @ {jd.company}</span>}
+        {jd.experienceRequired && <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}> · {jd.experienceRequired}</span>}
+      </div>
+      <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
+        {jd.skills.slice(0, 4).map((sk, i) => {
+          const c = tagColour(i);
+          return <span key={sk} style={{ padding: "0.15rem 0.55rem", borderRadius: "100px", background: c.bg, border: `1px solid ${c.border}`, color: c.text, fontSize: "0.7rem", fontWeight: 600 }}>{sk}</span>;
+        })}
+        {jd.skills.length > 4 && <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>+{jd.skills.length - 4} more</span>}
+      </div>
+      <button onClick={onClear} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "0.85rem", padding: "0.25rem", borderRadius: "50%", transition: "color 0.2s" }} onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.color = "#fca5a5"} onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)"} title="Remove JD">✕</button>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// MESSAGE BUBBLE
+// ──────────────────────────────────────────────────────────────────────────────
+function MessageBubble({ msg }: { msg: Message }) {
+  const isAI = msg.role === "ai";
+  // Simple markdown bold: **text**
+  const formatted = msg.content.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+  return (
+    <div style={{
+      display: "flex", gap: "0.75rem", alignItems: "flex-start",
+      flexDirection: isAI ? "row" : "row-reverse",
+      animation: "fadeInUp 0.3s ease both", marginBottom: "1rem",
+    }}>
+      {/* Avatar */}
+      <div style={{
+        width: 34, height: 34, borderRadius: "50%", flexShrink: 0,
+        background: isAI ? "linear-gradient(135deg, #7c6ff7, #22d3ee)" : "linear-gradient(135deg, #f472b6, #a78bfa)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: "0.9rem", fontWeight: 800, color: "#fff", boxShadow: isAI ? "0 0 12px rgba(124,111,247,0.3)" : "0 0 12px rgba(244,114,182,0.3)",
+      }}>
+        {isAI ? "Ai" : "U"}
+      </div>
+      {/* Bubble */}
+      <div style={{
+        maxWidth: "75%", padding: "0.875rem 1.1rem", borderRadius: isAI ? "4px 1rem 1rem 1rem" : "1rem 4px 1rem 1rem",
+        background: isAI ? "rgba(124,111,247,0.12)" : "rgba(34,211,238,0.08)",
+        border: `1px solid ${isAI ? "rgba(124,111,247,0.25)" : "rgba(34,211,238,0.18)"}`,
+        fontSize: "0.875rem", lineHeight: 1.7, color: "var(--text-primary)",
+      }}>
+        <span dangerouslySetInnerHTML={{ __html: formatted }} />
+        <div style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: "0.4rem", textAlign: isAI ? "left" : "right" }}>
+          {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// CENTER CHAT AREA
+// ──────────────────────────────────────────────────────────────────────────────
+function CenterChat({
+  session,
+  onSendMessage,
+  onJDParsed,
+  onClearJD,
+  aiLoading,
+}: {
+  session: MockSession | null;
+  onSendMessage: (text: string) => void;
+  onJDParsed: (jd: ParsedJobDescription, raw: string) => void;
+  onClearJD: () => void;
+  aiLoading: boolean;
+}) {
+  const [input, setInput] = useState("");
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [session?.messages, aiLoading]);
+
+  function handleSend() {
+    const val = input.trim();
+    if (!val || !session || aiLoading) return;
+    setInput("");
+    onSendMessage(val);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  }
+
+  // Auto-resize textarea
+  function handleInput(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    setInput(e.target.value);
+    const ta = e.target;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`;
+  }
+
+  if (!session) {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "1rem", padding: "2rem" }}>
+        <div style={{ width: 80, height: 80, borderRadius: "50%", background: "linear-gradient(135deg, rgba(124,111,247,0.2), rgba(34,211,238,0.1))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "2.2rem", animation: "float 3s ease-in-out infinite" }}>🎤</div>
+        <h2 style={{ fontSize: "1.4rem", fontWeight: 800, background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>Start a new mock interview</h2>
+        <p style={{ color: "var(--text-muted)", maxWidth: 360, textAlign: "center", lineHeight: 1.7, fontSize: "0.9rem" }}>Click <strong style={{ color: "#c4b5fd" }}>New mock +</strong> in the sidebar to begin. You can optionally add a job description for a targeted session.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", height: "100vh", minWidth: 0, overflow: "hidden" }}>
+      {/* Chat header */}
+      <div style={{ padding: "1rem 1.5rem", borderBottom: "1px solid var(--border-subtle)", background: "rgba(10,10,16,0.8)", backdropFilter: "blur(12px)", display: "flex", alignItems: "center", gap: "0.75rem", flexShrink: 0 }}>
+        <div style={{ width: 36, height: 36, borderRadius: "50%", background: "linear-gradient(135deg, #7c6ff7, #22d3ee)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1rem" }}>🎤</div>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: "0.95rem" }}>{session.role || "Mock Interview"}</div>
+          <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{session.company ? `@ ${session.company}` : "General interview"} · {session.messages.length} messages</div>
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.75rem", color: "#86efac", background: "rgba(74,222,128,0.08)", border: "1px solid rgba(74,222,128,0.2)", padding: "0.3rem 0.75rem", borderRadius: "100px" }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", display: "inline-block", animation: "pulse-glow 2s ease-in-out infinite" }} />
+          AI Interviewer active
         </div>
       </div>
 
-      <div style={{ display: "grid", gap: "1.5rem" }}>
-        {/* Hero card */}
-        <div style={{ background: "linear-gradient(135deg, rgba(124,111,247,0.12) 0%, rgba(34,211,238,0.06) 100%)", border: "1px solid rgba(124,111,247,0.25)", borderRadius: "1.5rem", padding: "2rem", position: "relative", overflow: "hidden", animation: "fadeInUp 0.5s ease both" }}>
-          <div style={{ position: "absolute", top: -60, right: -60, width: 220, height: 220, borderRadius: "50%", background: "radial-gradient(circle, rgba(124,111,247,0.15), transparent 70%)", pointerEvents: "none" }} />
-          <div style={{ position: "absolute", bottom: -40, left: -40, width: 160, height: 160, borderRadius: "50%", background: "radial-gradient(circle, rgba(34,211,238,0.12), transparent 70%)", pointerEvents: "none" }} />
-          <div style={{ display: "flex", alignItems: "center", gap: "1.5rem", flexWrap: "wrap", position: "relative" }}>
-            <div style={{ width: 80, height: 80, borderRadius: "50%", flexShrink: 0, background: "linear-gradient(135deg, #7c6ff7, #22d3ee)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.8rem", fontWeight: 800, color: "#fff", boxShadow: "0 0 30px rgba(124,111,247,0.4)", animation: "pulse-glow 3s ease-in-out infinite" }}>
-              {initials(data.name) || "?"}
+      {/* Messages */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "1.5rem" }}>
+        {/* JD section */}
+        {!session.jd && <JDUploadPanel onJD={onJDParsed} />}
+        {session.jd && <JDChip jd={session.jd} onClear={onClearJD} />}
+
+        {session.messages.length === 0 && (
+          <div style={{ textAlign: "center", padding: "3rem 1rem", opacity: 0.5 }}>
+            <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem" }}>💬</div>
+            <p style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>The interview will begin once the AI sends the first question…</p>
+          </div>
+        )}
+
+        {session.messages.map(m => <MessageBubble key={m.id} msg={m} />)}
+
+        {aiLoading && (
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", animation: "fadeIn 0.3s ease both", marginBottom: "1rem" }}>
+            <div style={{ width: 34, height: 34, borderRadius: "50%", background: "linear-gradient(135deg, #7c6ff7, #22d3ee)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.9rem", fontWeight: 800, color: "#fff" }}>Ai</div>
+            <div style={{ padding: "0.75rem 1rem", borderRadius: "4px 1rem 1rem 1rem", background: "rgba(124,111,247,0.1)", border: "1px solid rgba(124,111,247,0.2)", display: "flex", gap: "0.35rem", alignItems: "center" }}>
+              {[0,1,2].map(i => <span key={i} style={{ width: 7, height: 7, borderRadius: "50%", background: "#7c6ff7", display: "inline-block", animation: `pulse-glow 1.2s ease-in-out ${i * 0.2}s infinite` }} />)}
             </div>
-            <div style={{ flex: 1, minWidth: 200 }}>
-              <h2 style={{ fontSize: "clamp(1.4rem, 3vw, 2rem)", fontWeight: 800, letterSpacing: "-0.02em", marginBottom: "0.4rem", background: "linear-gradient(135deg, #f0f0ff, #c4b5fd)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>
-                {data.name || "Unknown Name"}
-              </h2>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
-                {data.email && <a href={`mailto:${data.email}`} style={{ display: "flex", alignItems: "center", gap: "0.35rem", color: "var(--text-secondary)", textDecoration: "none", fontSize: "0.875rem" }}>✉️ {data.email}</a>}
-                {data.phone && <span style={{ display: "flex", alignItems: "center", gap: "0.35rem", color: "var(--text-secondary)", fontSize: "0.875rem" }}>📱 {data.phone}</span>}
-                {data.location && <span style={{ display: "flex", alignItems: "center", gap: "0.35rem", color: "var(--text-secondary)", fontSize: "0.875rem" }}>📍 {data.location}</span>}
-              </div>
-              <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.75rem" }}>
-                {data.linkedin && <a href={data.linkedin} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", background: "rgba(10,102,194,0.2)", border: "1px solid rgba(10,102,194,0.35)", color: "#93c5fd", padding: "0.3rem 0.85rem", borderRadius: "100px", textDecoration: "none", fontSize: "0.8rem", fontWeight: 600 }}>in LinkedIn</a>}
-                {data.github && <a href={data.github} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", color: "var(--text-primary)", padding: "0.3rem 0.85rem", borderRadius: "100px", textDecoration: "none", fontSize: "0.8rem", fontWeight: 600 }}>⌨️ GitHub</a>}
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
-              {[{ label: "Skills", value: data.skills.length }, { label: "Projects", value: data.projects.length }, { label: "Education", value: data.education.length }].map((s, i) => (
-                <div key={i} style={{ textAlign: "center", background: "rgba(255,255,255,0.05)", border: "1px solid var(--border-subtle)", borderRadius: "1rem", padding: "0.75rem 1.25rem", minWidth: 80 }}>
-                  <div style={{ fontSize: "1.75rem", fontWeight: 800, background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>{s.value}</div>
-                  <div style={{ color: "var(--text-muted)", fontSize: "0.75rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>{s.label}</div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input bar */}
+      <div style={{ padding: "1rem 1.25rem", borderTop: "1px solid var(--border-subtle)", background: "rgba(10,10,16,0.9)", backdropFilter: "blur(12px)", flexShrink: 0 }}>
+        <div style={{
+          display: "flex", alignItems: "flex-end", gap: "0.75rem",
+          background: "rgba(255,255,255,0.04)", border: "1px solid rgba(124,111,247,0.25)",
+          borderRadius: "1rem", padding: "0.6rem 0.75rem", transition: "border-color 0.2s",
+        }}
+          onFocusCapture={e => (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(124,111,247,0.5)"}
+          onBlurCapture={e => (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(124,111,247,0.25)"}
+        >
+          {/* Mic icon */}
+          <button style={{ width: 34, height: 34, borderRadius: "50%", background: "rgba(124,111,247,0.15)", border: "1px solid rgba(124,111,247,0.3)", color: "#c4b5fd", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: "0.9rem", flexShrink: 0, transition: "all 0.2s" }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(124,111,247,0.3)"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(124,111,247,0.15)"; }}
+            title="Voice input (coming soon)">
+            🎤
+          </button>
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={handleInput}
+            onKeyDown={handleKeyDown}
+            placeholder="Type your answer… (Enter to send, Shift+Enter for newline)"
+            rows={1}
+            style={{
+              flex: 1, background: "transparent", border: "none", outline: "none",
+              color: "var(--text-primary)", fontSize: "0.875rem", fontFamily: "inherit",
+              lineHeight: 1.6, resize: "none", maxHeight: 140, overflowY: "auto",
+              padding: "0.3rem 0",
+            }}
+          />
+          {/* Send button */}
+          <button
+            id="send-message-btn"
+            onClick={handleSend}
+            disabled={!input.trim()}
+            style={{
+              width: 34, height: 34, borderRadius: "50%", flexShrink: 0,
+              background: input.trim() ? "linear-gradient(135deg, #7c6ff7, #22d3ee)" : "rgba(255,255,255,0.05)",
+              border: "none", color: input.trim() ? "#fff" : "var(--text-muted)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: input.trim() ? "pointer" : "not-allowed", fontSize: "1rem",
+              transition: "all 0.2s", boxShadow: input.trim() ? "0 0 16px rgba(124,111,247,0.4)" : "none",
+            }}
+          >
+            →
+          </button>
+        </div>
+        <p style={{ fontSize: "0.68rem", color: "var(--text-muted)", textAlign: "center", marginTop: "0.5rem" }}>Powered by Gemini 2.5 Flash · Shift+Enter for newline</p>
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// RIGHT PROFILE PANEL
+// ──────────────────────────────────────────────────────────────────────────────
+function RightPanel({
+  profile,
+  user,
+  onSignOut,
+  signingOut,
+  onUploadResume,
+}: {
+  profile: ParsedResume | null;
+  user: { displayName: string | null; email: string | null; uid: string };
+  onSignOut: () => void;
+  signingOut: boolean;
+  onUploadResume: () => void;
+}) {
+  const [tab, setTab] = useState<"skills" | "info">("skills");
+  const skillCats = profile ? categoriseSkills(profile.skills) : [];
+  const name = profile?.name || user.displayName || user.email || "User";
+
+  return (
+    <aside style={{
+      width: 280, minWidth: 240, maxWidth: 300,
+      background: "rgba(10,10,16,0.95)", borderLeft: "1px solid var(--border-subtle)",
+      display: "flex", flexDirection: "column", height: "100vh",
+      position: "sticky", top: 0, flexShrink: 0, overflow: "hidden",
+    }}>
+      {/* Header */}
+      <div style={{ padding: "1.25rem 1.25rem 0.75rem", borderBottom: "1px solid var(--border-subtle)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontSize: "0.75rem", fontWeight: 700, letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--text-muted)" }}>Profile</span>
+        <button
+          id="signout-btn"
+          onClick={onSignOut}
+          disabled={signingOut}
+          style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)", padding: "0.3rem 0.75rem", borderRadius: "100px", cursor: "pointer", fontSize: "0.72rem", fontWeight: 600, transition: "all 0.2s" }}
+          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = "#fca5a5"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(239,68,68,0.3)"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.1)"; }}
+        >
+          {signingOut ? "…" : "Sign out"}
+        </button>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "1.25rem" }}>
+        {/* Avatar */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.6rem", marginBottom: "1.25rem" }}>
+          <div style={{
+            width: 72, height: 72, borderRadius: "50%",
+            background: "linear-gradient(135deg, #7c6ff7, #22d3ee)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "1.6rem", fontWeight: 800, color: "#fff",
+            boxShadow: "0 0 28px rgba(124,111,247,0.4)", animation: "pulse-glow 3s ease-in-out infinite",
+          }}>
+            {profile ? initials(name) : (user.displayName || user.email || "U")[0].toUpperCase()}
+          </div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontWeight: 700, fontSize: "0.95rem", background: "linear-gradient(135deg, #f0f0ff, #c4b5fd)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>{name}</div>
+            {user.email && <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.15rem" }}>{user.email}</div>}
+          </div>
+          {profile && (
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              {[{ label: "Skills", val: profile.skills.length }, { label: "Projects", val: profile.projects.length }].map(s => (
+                <div key={s.label} style={{ textAlign: "center", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-subtle)", borderRadius: "0.65rem", padding: "0.4rem 0.75rem" }}>
+                  <div style={{ fontSize: "1.1rem", fontWeight: 800, background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>{s.val}</div>
+                  <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{s.label}</div>
                 </div>
               ))}
             </div>
-          </div>
-          {data.summary && (
-            <div style={{ marginTop: "1.5rem", padding: "1rem 1.25rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-subtle)", borderRadius: "1rem", color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: 1.7, position: "relative" }}>
-              <span style={{ fontSize: "1.4rem", lineHeight: 1, position: "absolute", top: "0.6rem", left: "0.75rem", opacity: 0.3 }}>&ldquo;</span>
-              <p style={{ paddingLeft: "1.25rem" }}>{data.summary}</p>
-            </div>
           )}
         </div>
 
-        {/* Tabs */}
-        <div style={{ display: "flex", gap: "0.5rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-subtle)", borderRadius: "100px", padding: "0.35rem", width: "fit-content" }}>
-          {(["skills", "projects", "education"] as const).map((tab) => (
-            <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: "0.5rem 1.5rem", borderRadius: "100px", border: "none", cursor: "pointer", fontWeight: 600, fontSize: "0.9rem", textTransform: "capitalize", transition: "all 0.25s", background: activeTab === tab ? "linear-gradient(135deg, #7c6ff7, #a78bfa)" : "transparent", color: activeTab === tab ? "#fff" : "var(--text-secondary)", boxShadow: activeTab === tab ? "0 4px 20px rgba(124,111,247,0.35)" : "none" }}>
-              {tab === "skills" ? `⚡ Skills (${data.skills.length})` : tab === "projects" ? `🚀 Projects (${data.projects.length})` : `🎓 Education (${data.education.length})`}
+        {/* Divider */}
+        <div style={{ height: 1, background: "var(--border-subtle)", margin: "0 0 1.1rem" }} />
+
+        {!profile ? (
+          <div style={{ textAlign: "center" }}>
+            <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", lineHeight: 1.7, marginBottom: "1rem" }}>Upload your resume to see your profile here and get personalised interview questions.</p>
+            <button
+              onClick={onUploadResume}
+              style={{ padding: "0.55rem 1.25rem", borderRadius: "100px", background: "linear-gradient(135deg, rgba(124,111,247,0.3), rgba(34,211,238,0.15))", border: "1px solid rgba(124,111,247,0.4)", color: "#c4b5fd", cursor: "pointer", fontSize: "0.82rem", fontWeight: 700, transition: "all 0.2s" }}
+            >
+              📤 Upload Resume
             </button>
-          ))}
+          </div>
+        ) : (
+          <>
+            {/* Inner tabs */}
+            <div style={{ display: "flex", gap: "0.25rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-subtle)", borderRadius: "100px", padding: "0.2rem", marginBottom: "1rem" }}>
+              {(["skills","info"] as const).map(t => (
+                <button key={t} onClick={() => setTab(t)} style={{ flex: 1, padding: "0.4rem 0", borderRadius: "100px", border: "none", cursor: "pointer", fontWeight: 600, fontSize: "0.72rem", transition: "all 0.2s", textTransform: "capitalize", background: tab === t ? "linear-gradient(135deg, #7c6ff7, #a78bfa)" : "transparent", color: tab === t ? "#fff" : "var(--text-secondary)" }}>
+                  {t === "skills" ? "⚡ Skills" : "ℹ️ Info"}
+                </button>
+              ))}
+            </div>
+
+            {tab === "skills" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                {skillCats.length === 0 ? <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", textAlign: "center" }}>No skills detected yet.</p> : skillCats.map(([cat, skills], ci) => (
+                  <div key={cat}>
+                    <div style={{ fontSize: "0.65rem", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: "0.4rem" }}>{cat}</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+                      {skills.map(sk => { const c = tagColour(ci); return <span key={sk} style={{ padding: "0.2rem 0.55rem", borderRadius: "100px", background: c.bg, border: `1px solid ${c.border}`, color: c.text, fontSize: "0.68rem", fontWeight: 600 }}>{sk}</span>; })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {tab === "info" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+                {profile.email && <InfoRow icon="✉️" value={profile.email} />}
+                {profile.phone && <InfoRow icon="📱" value={profile.phone} />}
+                {profile.location && <InfoRow icon="📍" value={profile.location} />}
+                {profile.linkedin && <InfoRow icon="🔗" value="LinkedIn" href={profile.linkedin} />}
+                {profile.github && <InfoRow icon="⌨️" value="GitHub" href={profile.github} />}
+                {profile.summary && (
+                  <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-subtle)", borderRadius: "0.65rem", padding: "0.75rem", fontSize: "0.75rem", color: "var(--text-secondary)", lineHeight: 1.7, marginTop: "0.25rem" }}>
+                    {profile.summary.slice(0, 220)}{profile.summary.length > 220 ? "…" : ""}
+                  </div>
+                )}
+                <button onClick={onUploadResume} style={{ marginTop: "0.5rem", padding: "0.45rem 1rem", borderRadius: "100px", background: "rgba(124,111,247,0.1)", border: "1px solid rgba(124,111,247,0.25)", color: "#c4b5fd", cursor: "pointer", fontSize: "0.75rem", fontWeight: 600, transition: "all 0.2s" }}>✏️ Update Resume</button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function InfoRow({ icon, value, href }: { icon: string; value: string; href?: string }) {
+  const content = <span style={{ fontSize: "0.78rem", color: href ? "#93c5fd" : "var(--text-secondary)", wordBreak: "break-all" }}>{value}</span>;
+  return (
+    <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
+      <span style={{ fontSize: "0.85rem", flexShrink: 0 }}>{icon}</span>
+      {href ? <a href={href} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>{content}</a> : content}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// RESUME UPLOAD MODAL
+// ──────────────────────────────────────────────────────────────────────────────
+function ResumeUploadModal({ onFile, loading, onClose }: { onFile: (f: File) => void; loading: boolean; onClose: () => void }) {
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem", animation: "fadeIn 0.2s ease both" }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: "var(--bg-secondary)", border: "1px solid rgba(124,111,247,0.3)", borderRadius: "1.5rem", padding: "2rem", maxWidth: 480, width: "100%", animation: "fadeInUp 0.3s ease both" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
+          <h3 style={{ fontWeight: 800, fontSize: "1.2rem", background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>Upload Resume</h3>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "1.2rem" }}>✕</button>
         </div>
-
-        {/* Skills panel */}
-        {activeTab === "skills" && (
-          <div style={{ animation: "fadeInUp 0.4s ease both" }}>
-            {data.skills.length === 0 ? <EmptyState icon="⚡" message="No skills detected." /> : (
-              <div style={{ display: "grid", gap: "1rem" }}>
-                {skillCategories.map(([category, skills], catIdx) => (
-                  <div key={category} style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)", borderRadius: "1.25rem", padding: "1.25rem 1.5rem" }}>
-                    <h3 style={{ fontSize: "0.8rem", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: "1rem" }}>{category}</h3>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                      {skills.map((skill) => { const col = tagColour(catIdx); return <span key={skill} style={{ padding: "0.35rem 0.85rem", borderRadius: "100px", background: col.bg, border: `1px solid ${col.border}`, color: col.text, fontSize: "0.82rem", fontWeight: 600 }}>{skill}</span>; })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Projects panel */}
-        {activeTab === "projects" && (
-          <div style={{ animation: "fadeInUp 0.4s ease both" }}>
-            {data.projects.length === 0 ? <EmptyState icon="🚀" message="No projects detected." /> : (
-              <div style={{ display: "grid", gap: "1rem" }}>
-                {data.projects.map((proj, pIdx) => (
-                  <div key={pIdx} style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)", borderRadius: "1.25rem", padding: "1.5rem", position: "relative", overflow: "hidden" }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(124,111,247,0.3)"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = "var(--border-subtle)"; }}
-                  >
-                    <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: "linear-gradient(180deg, #7c6ff7, #22d3ee)", borderRadius: "3px 0 0 3px" }} />
-                    <div style={{ paddingLeft: "0.75rem" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem", flexWrap: "wrap" }}>
-                        <h3 style={{ fontWeight: 700, fontSize: "1.05rem" }}>{proj.name}</h3>
-                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", background: "rgba(255,255,255,0.05)", padding: "0.2rem 0.6rem", borderRadius: "100px", border: "1px solid var(--border-subtle)" }}>Project #{pIdx + 1}</span>
-                      </div>
-                      {proj.description && <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", lineHeight: 1.7, marginTop: "0.5rem" }}>{proj.description}</p>}
-                      {proj.technologies.length > 0 && (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "1rem" }}>
-                          {proj.technologies.map((tech, tIdx) => { const col = tagColour(tIdx + 1); return <span key={tech} style={{ padding: "0.2rem 0.65rem", borderRadius: "100px", background: col.bg, border: `1px solid ${col.border}`, color: col.text, fontSize: "0.75rem", fontWeight: 600 }}>{tech}</span>; })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Education panel */}
-        {activeTab === "education" && (
-          <div style={{ animation: "fadeInUp 0.4s ease both" }}>
-            {data.education.length === 0 ? <EmptyState icon="🎓" message="No education detected." /> : (
-              <div style={{ display: "grid", gap: "1rem" }}>
-                {data.education.map((edu, i) => (
-                  <div key={i} style={{ background: "var(--bg-card)", border: "1px solid var(--border-subtle)", borderRadius: "1.25rem", padding: "1.5rem", position: "relative", overflow: "hidden" }}>
-                    <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: "linear-gradient(180deg, #f472b6, #a78bfa)", borderRadius: "3px 0 0 3px" }} />
-                    <div style={{ paddingLeft: "0.75rem" }}>
-                      <h3 style={{ fontWeight: 700, fontSize: "1.05rem", marginBottom: "0.35rem" }}>
-                        {edu.degree}
-                        {edu.year && <span style={{ fontWeight: 500, color: "#a78bfa", fontSize: "0.9rem", marginLeft: "0.45rem" }}>({edu.year})</span>}
-                      </h3>
-                      {edu.institution && <p style={{ color: "var(--text-secondary)", fontSize: "0.875rem", margin: 0 }}>🏛️ {edu.institution}</p>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+        <div
+          onClick={() => !loading && inputRef.current?.click()}
+          onDragOver={e => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={e => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}
+          style={{ border: `2px dashed ${dragging ? "#7c6ff7" : "rgba(124,111,247,0.3)"}`, borderRadius: "1rem", padding: "3rem 1.5rem", textAlign: "center", cursor: loading ? "default" : "pointer", transition: "all 0.25s", background: dragging ? "rgba(124,111,247,0.08)" : "transparent" }}
+        >
+          <input ref={inputRef} type="file" accept=".pdf,.txt,.doc,.docx" style={{ display: "none" }} onChange={e => e.target.files?.[0] && onFile(e.target.files[0])} id="resume-upload" />
+          {loading ? (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem" }}>
+              <div style={{ width: 44, height: 44, borderRadius: "50%", border: "3px solid rgba(124,111,247,0.2)", borderTopColor: "#7c6ff7", animation: "spin-slow 0.8s linear infinite" }} />
+              <p style={{ color: "var(--text-secondary)" }}>Parsing resume…</p>
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: "2.5rem", marginBottom: "0.75rem", animation: "float 3s ease-in-out infinite" }}>📄</div>
+              <p style={{ fontWeight: 700, color: "var(--text-primary)", marginBottom: "0.4rem" }}>Drop your resume here</p>
+              <p style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>or click to browse — PDF, TXT supported</p>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-// ─── Dashboard Page ─────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
+// MAIN DASHBOARD
+// ──────────────────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
 
-  // UI state
-  const [appLoading, setAppLoading] = useState(true);   // loading existing Firestore data
-  const [uploadLoading, setUploadLoading] = useState(false); // uploading/parsing a new file
-  const [retrying, setRetrying] = useState(false);
-  const [profile, setProfile] = useState<ParsedResume | null>(null);
-  const [isEditing, setIsEditing] = useState(false);     // true when user clicked "Edit Resume"
-  const [error, setError] = useState<string | null>(null);
-  const [saveWarning, setSaveWarning] = useState<string | null>(null);
-  const [savedAt, setSavedAt] = useState<string | null>(null);
-  const [signingOut, setSigningOut] = useState(false);
+  const [appLoading, setAppLoading]             = useState(true);
+  const [uploadLoading, setUploadLoading]       = useState(false);
+  const [profile, setProfile]                   = useState<ParsedResume | null>(null);
+  const [sessions, setSessions]                 = useState<MockSession[]>([]);
+  const [activeSessionId, setActiveSessionId]   = useState<string | null>(null);
+  const [signingOut, setSigningOut]             = useState(false);
+  const [aiLoading, setAiLoading]               = useState(false);
+  const [showResumeModal, setShowResumeModal]   = useState(false);
 
-  const lastParsed = useRef<ParsedResume | null>(null);
+  const activeSession = sessions.find(s => s.id === activeSessionId) ?? null;
 
-  // ─── Firestore save helper ───────────────────────────────────────────────────
+  // ─── Firestore save ─────────────────────────────────────────────────────────
   const saveToFirestore = useCallback(async (parsed: ParsedResume) => {
     if (!user) return;
     const docRef = doc(db, "User", user.uid);
     await setDoc(docRef, {
-      uid: user.uid,
-      email: user.email,
-      displayName: user.displayName,
+      uid: user.uid, email: user.email, displayName: user.displayName,
       resume: {
-        name: parsed.name,
-        email: parsed.email,
-        phone: parsed.phone,
-        location: parsed.location,
-        linkedin: parsed.linkedin,
-        github: parsed.github,
-        summary: parsed.summary,
-        skills: parsed.skills,
-        projects: parsed.projects.map(p => ({
-          name: p.name,
-          description: p.description,
-          technologies: p.technologies,
-        })),
+        name: parsed.name, email: parsed.email, phone: parsed.phone,
+        location: parsed.location, linkedin: parsed.linkedin, github: parsed.github,
+        summary: parsed.summary, skills: parsed.skills,
+        projects: parsed.projects.map(p => ({ name: p.name, description: p.description, technologies: p.technologies })),
         education: parsed.education,
       },
       updatedAt: serverTimestamp(),
     }, { merge: true });
   }, [user]);
 
-  // ─── Load existing profile from Firestore on login ───────────────────────────
+  // ─── Load profile ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (authLoading) return;
     if (!user) { router.replace("/auth?mode=login"); return; }
-
-    async function loadProfile() {
+    async function load() {
       setAppLoading(true);
       try {
-        const docRef = doc(db, "User", user!.uid);
-        const snap = await getDoc(docRef);
+        const snap = await getDoc(doc(db, "User", user!.uid));
         if (snap.exists()) {
-          const data = snap.data();
-          const r = data.resume;
+          const r = snap.data()?.resume;
           if (r) {
-            const parsed: ParsedResume = {
-              name: r.name ?? "",
-              email: r.email ?? "",
-              phone: r.phone ?? "",
-              location: r.location ?? "",
-              linkedin: r.linkedin ?? "",
-              github: r.github ?? "",
-              summary: r.summary ?? "",
-              rawText: "",
-              skills: r.skills ?? [],
-              projects: r.projects ?? [],
-              education: r.education ?? [],
-            };
-            setProfile(parsed);
-            setSavedAt(data.updatedAt?.toDate?.().toISOString() ?? new Date().toISOString());
+            setProfile({ name: r.name ?? "", email: r.email ?? "", phone: r.phone ?? "", location: r.location ?? "", linkedin: r.linkedin ?? "", github: r.github ?? "", summary: r.summary ?? "", rawText: "", skills: r.skills ?? [], projects: r.projects ?? [], education: r.education ?? [] });
           }
         }
-      } catch (err) {
-        console.error("[Firestore load]:", err);
-        // Non-fatal — just show upload zone
-      } finally {
-        setAppLoading(false);
-      }
+      } catch (e) { console.error(e); }
+      finally { setAppLoading(false); }
     }
-
-    loadProfile();
+    load();
   }, [user, authLoading, router]);
 
-  // ─── Retry save ───────────────────────────────────────────────────────────────
-  async function retrySave() {
-    if (!lastParsed.current) return;
-    setRetrying(true);
-    setSaveWarning(null);
+  // ─── New session ─────────────────────────────────────────────────────────────
+  function handleNewSession() {
+    const id = `session-${Date.now()}`;
+    const session: MockSession = {
+      id, title: `Mock #${sessions.length + 1}`, company: "", role: "",
+      createdAt: new Date(), messages: [], jd: null,
+    };
+    setSessions(prev => [session, ...prev]);
+    setActiveSessionId(id);
+  }
+
+  // ─── JD parsed — kick off first AI message ───────────────────────────────────
+  async function handleJDParsed(jd: ParsedJobDescription) {
+    if (!activeSessionId) return;
+    // Optimistically set JD and show typing
+    setSessions(prev => prev.map(s =>
+      s.id === activeSessionId ? { ...s, jd, role: jd.title, company: jd.company } : s
+    ));
     try {
-      await saveToFirestore(lastParsed.current);
-      setSavedAt(new Date().toISOString());
-    } catch (err) {
-      const code = (err as { code?: string })?.code ?? "unknown";
-      const msg = (err as Error)?.message ?? "unknown error";
-      console.error("[Firestore retry]:", err);
-      setSaveWarning(`Save failed (${code}): ${msg}`);
-    } finally {
-      setRetrying(false);
+      const aiText = await callGemini({
+        history: [],
+        userMessage: "START_INTERVIEW",
+        jd,
+        resumeSkills: profile?.skills ?? [],
+        resumeName: profile?.name ?? "",
+      });
+      const firstMsg: Message = { id: `msg-${Date.now()}`, role: "ai", content: aiText, timestamp: new Date() };
+      setSessions(prev => prev.map(s =>
+        s.id === activeSessionId ? { ...s, messages: [firstMsg] } : s
+      ));
+    } catch (e) {
+      console.error("[Gemini first message]:", e);
     }
   }
 
-  // ─── Handle new file upload ────────────────────────────────────────────────
-  async function handleFile(file: File) {
-    setError(null);
-    setSaveWarning(null);
-    setSavedAt(null);
-    setUploadLoading(true);
+  // ─── Clear JD ────────────────────────────────────────────────────────────────
+  function handleClearJD() {
+    if (!activeSessionId) return;
+    setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, jd: null, role: "", company: "", messages: [] } : s));
+  }
 
-    let parsed;
+  // ─── Send message → Gemini ────────────────────────────────────────────────────
+  async function handleSendMessage(text: string) {
+    if (!activeSessionId || aiLoading) return;
+    setAiLoading(true);
+
+    // 1. Append user message immediately
+    let currentSession: MockSession | undefined;
+    setSessions(prev => prev.map(s => {
+      if (s.id !== activeSessionId) return s;
+      const userMsg: Message = { id: `msg-${Date.now()}-u`, role: "user", content: text, timestamp: new Date() };
+      currentSession = { ...s, messages: [...s.messages, userMsg] };
+      return currentSession;
+    }));
+
+    // 2. Build Gemini history from existing messages (before user's new message)
+    const priorMessages = currentSession?.messages ?? [];
+    const geminiHistory = priorMessages
+      .slice(0, -1) // exclude the just-added user message (it becomes userMessage param)
+      .map(m => ({ role: m.role === "ai" ? "model" as const : "user" as const, text: m.content }));
+
+    // 3. Call Gemini
+    try {
+      const aiText = await callGemini({
+        history: geminiHistory,
+        userMessage: text,
+        jd: currentSession?.jd ?? null,
+        resumeSkills: profile?.skills ?? [],
+        resumeName: profile?.name ?? "",
+      });
+      const aiMsg: Message = { id: `msg-${Date.now()}-a`, role: "ai", content: aiText, timestamp: new Date() };
+      setSessions(prev => prev.map(s =>
+        s.id === activeSessionId ? { ...s, messages: [...s.messages, aiMsg] } : s
+      ));
+    } catch (e) {
+      console.error("[Gemini response]:", e);
+      const errMsg: Message = { id: `msg-${Date.now()}-err`, role: "ai", content: "⚠️ Failed to get a response. Please check your API key and try again.", timestamp: new Date() };
+      setSessions(prev => prev.map(s =>
+        s.id === activeSessionId ? { ...s, messages: [...s.messages, errMsg] } : s
+      ));
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  // ─── Resume upload ────────────────────────────────────────────────────────────
+  async function handleResumeFile(file: File) {
+    setUploadLoading(true);
     try {
       const text = await extractText(file);
-      if (!text || text.trim().length < 30)
-        throw new Error("Could not extract enough text. Try a text-based PDF or .txt file.");
-      parsed = parseResumeText(text);
-      lastParsed.current = parsed;
+      if (!text || text.trim().length < 30) throw new Error("Could not extract text.");
+      const parsed = parseResumeText(text);
       setProfile(parsed);
-      setIsEditing(false); // return to profile view
-    } catch (err) {
-      setError((err as Error).message ?? "Something went wrong while parsing.");
-      setUploadLoading(false);
-      return;
-    } finally {
-      setUploadLoading(false);
-    }
-
-    if (user && parsed) {
-      try {
-        await saveToFirestore(parsed);
-        setSavedAt(new Date().toISOString());
-      } catch (err) {
-        const code = (err as { code?: string })?.code ?? "unknown";
-        const msg = (err as Error)?.message ?? "unknown error";
-        console.error("[Firestore save]:", err);
-        setSaveWarning(`Save failed (${code}): ${msg}`);
-      }
-    }
+      await saveToFirestore(parsed);
+    } catch (e) { console.error(e); }
+    finally { setUploadLoading(false); setShowResumeModal(false); }
   }
 
   async function handleSignOut() {
@@ -489,149 +869,58 @@ export default function Dashboard() {
     router.push("/");
   }
 
-  // ─── Loading states ───────────────────────────────────────────────────────
   if (authLoading || appLoading) {
     return (
-      <div style={{ minHeight: "100vh", background: "var(--bg-primary)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "1rem" }}>
-        <div style={{ width: 48, height: 48, borderRadius: "50%", border: "3px solid rgba(124,111,247,0.2)", borderTopColor: "#7c6ff7", animation: "spin-slow 0.8s linear infinite" }} />
-        {appLoading && !authLoading && (
-          <p style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>Loading your profile…</p>
-        )}
+      <div style={{ minHeight: "100vh", background: "var(--bg-primary)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ width: 44, height: 44, borderRadius: "50%", border: "3px solid rgba(124,111,247,0.2)", borderTopColor: "#7c6ff7", animation: "spin-slow 0.8s linear infinite" }} />
       </div>
     );
   }
 
-  // ─── Determine what to show in main ─────────────────────────────────────
-  // Show upload zone if: no profile yet, OR user clicked "Edit Resume"
-  const showUpload = !profile || isEditing;
-
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg-primary)", position: "relative", overflowX: "hidden" }}>
-      {/* Background decoration */}
-      <div style={{ position: "fixed", top: "10%", left: "50%", transform: "translateX(-50%)", width: "70vw", height: "60vh", background: "radial-gradient(ellipse, rgba(124,111,247,0.07) 0%, transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
+    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--bg-primary)", position: "relative" }}>
 
-      {/* Navbar */}
-      <nav style={{ position: "sticky", top: 0, zIndex: 100, padding: "1rem 2rem", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid var(--border-subtle)", backdropFilter: "blur(20px)", background: "rgba(10,10,15,0.8)" }}>
-        <div
-          onClick={() => router.push("/")}
-          style={{ display: "flex", alignItems: "center", gap: "0.6rem", fontWeight: 800, fontSize: "1.1rem", letterSpacing: "-0.02em", cursor: "pointer" }}
-        >
-          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 32, height: 32, borderRadius: "8px", background: "linear-gradient(135deg, #7c6ff7, #22d3ee)", fontSize: "1rem" }}>📄</span>
-          <span style={{ background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>ResumeAI</span>
-        </div>
+      {/* Ambient background glow */}
+      <div style={{ position: "fixed", top: "20%", left: "50%", transform: "translateX(-50%)", width: "60vw", height: "40vh", background: "radial-gradient(ellipse, rgba(124,111,247,0.05) 0%, transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
 
-        {/* Nav tabs */}
-        {profile && (
-          <div style={{ display: "flex", gap: "0.25rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-subtle)", borderRadius: "100px", padding: "0.25rem" }}>
-            <button
-              onClick={() => setIsEditing(false)}
-              style={{
-                padding: "0.4rem 1.1rem", borderRadius: "100px", border: "none", cursor: "pointer",
-                fontWeight: 600, fontSize: "0.82rem", transition: "all 0.2s",
-                background: !isEditing ? "linear-gradient(135deg, #7c6ff7, #a78bfa)" : "transparent",
-                color: !isEditing ? "#fff" : "var(--text-secondary)",
-              }}
-            >
-              👤 Profile
-            </button>
-            <button
-              onClick={() => setIsEditing(true)}
-              style={{
-                padding: "0.4rem 1.1rem", borderRadius: "100px", border: "none", cursor: "pointer",
-                fontWeight: 600, fontSize: "0.82rem", transition: "all 0.2s",
-                background: isEditing ? "linear-gradient(135deg, #7c6ff7, #a78bfa)" : "transparent",
-                color: isEditing ? "#fff" : "var(--text-secondary)",
-              }}
-            >
-              ✏️ Edit Resume
-            </button>
-          </div>
-        )}
+      {/* LEFT */}
+      <LeftSidebar
+        sessions={sessions}
+        activeId={activeSessionId}
+        onSelect={id => setActiveSessionId(id)}
+        onNew={handleNewSession}
+      />
 
-        {/* User info + sign out */}
-        {user && (
-          <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-              <div style={{ width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg, #7c6ff7, #22d3ee)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: "0.85rem", color: "#fff" }}>
-                {(user.displayName || user.email || "U")[0].toUpperCase()}
-              </div>
-              <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {user.displayName || user.email}
-              </span>
-            </div>
-            <button
-              id="signout-btn"
-              onClick={handleSignOut}
-              disabled={signingOut}
-              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)", padding: "0.4rem 1rem", borderRadius: "100px", cursor: "pointer", fontSize: "0.8rem", fontWeight: 600, transition: "all 0.2s" }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#fca5a5"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(239,68,68,0.3)"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "var(--text-muted)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.1)"; }}
-            >
-              {signingOut ? "Signing out…" : "Sign out"}
-            </button>
-          </div>
-        )}
-      </nav>
-
-      {/* Main content */}
-      <main style={{ maxWidth: 800, margin: "0 auto", padding: "4rem 1.5rem 6rem", position: "relative", zIndex: 1 }}>
-        {/* Fatal parse error */}
-        {error && (
-          <div style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.35)", color: "#fca5a5", borderRadius: "1rem", padding: "1rem 1.25rem", marginBottom: "2rem", fontSize: "0.9rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
-            <span style={{ fontSize: "1.2rem" }}>⚠️</span>
-            {error}
-            <button onClick={() => setError(null)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#fca5a5", cursor: "pointer", fontSize: "1rem" }}>✕</button>
-          </div>
-        )}
-        {/* Non-fatal save warning */}
-        {saveWarning && (
-          <div style={{ background: "rgba(251,191,36,0.08)", border: "1px solid rgba(251,191,36,0.3)", color: "#fde68a", borderRadius: "1rem", padding: "1rem 1.25rem", marginBottom: "2rem", fontSize: "0.875rem", display: "flex", alignItems: "flex-start", gap: "0.75rem", flexWrap: "wrap" }}>
-            <span style={{ fontSize: "1.2rem", flexShrink: 0 }}>🛡️</span>
-            <div style={{ flex: 1, minWidth: 200 }}>
-              <p style={{ marginBottom: "0.5rem" }}>
-                <strong>Cloud save was blocked</strong> — your ad blocker may be intercepting Firestore requests.
-              </p>
-              <p style={{ color: "rgba(253,230,138,0.75)", fontSize: "0.82rem", lineHeight: 1.6 }}>
-                To fix: allowlist <code style={{ background: "rgba(251,191,36,0.15)", padding: "0.1rem 0.3rem", borderRadius: 4 }}>localhost</code> in your ad blocker, then click Retry.
-              </p>
-            </div>
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexShrink: 0 }}>
-              <button
-                id="retry-save-btn"
-                onClick={retrySave}
-                disabled={retrying}
-                style={{ background: "rgba(251,191,36,0.2)", border: "1px solid rgba(251,191,36,0.4)", color: "#fde68a", padding: "0.4rem 1rem", borderRadius: "100px", cursor: retrying ? "not-allowed" : "pointer", fontSize: "0.82rem", fontWeight: 700, transition: "all 0.2s", display: "flex", alignItems: "center", gap: "0.4rem" }}
-              >
-                {retrying ? (
-                  <><span style={{ width: 12, height: 12, borderRadius: "50%", border: "2px solid rgba(253,230,138,0.3)", borderTopColor: "#fde68a", animation: "spin-slow 0.7s linear infinite", display: "inline-block" }} />Retrying…</>
-                ) : "↺ Retry save"}
-              </button>
-              <button onClick={() => setSaveWarning(null)} style={{ background: "none", border: "none", color: "rgba(253,230,138,0.6)", cursor: "pointer", fontSize: "1rem" }}>✕</button>
-            </div>
-          </div>
-        )}
-
-        {/* Main view */}
-        {showUpload ? (
-          <UploadZone
-            onFile={handleFile}
-            loading={uploadLoading}
-            isEdit={isEditing && !!profile}
-            onCancelEdit={() => setIsEditing(false)}
-          />
-        ) : (
-          <ProfileView
-            data={profile!}
-            onEditResume={() => setIsEditing(true)}
-            savedAt={savedAt}
-          />
-        )}
+      {/* CENTER */}
+      <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", position: "relative", zIndex: 1 }}>
+        <CenterChat
+          session={activeSession}
+          onSendMessage={handleSendMessage}
+          onJDParsed={handleJDParsed}
+          onClearJD={handleClearJD}
+          aiLoading={aiLoading}
+        />
       </main>
 
-      {/* Footer */}
-      <footer style={{ textAlign: "center", padding: "2rem", borderTop: "1px solid var(--border-subtle)", color: "var(--text-muted)", fontSize: "0.8rem" }}>
-        Built with ✨ — ResumeAI parses resumes in your browser and saves profiles securely to Firebase.
-      </footer>
+      {/* RIGHT */}
+      {user && (
+        <RightPanel
+          profile={profile}
+          user={{ displayName: user.displayName, email: user.email, uid: user.uid }}
+          onSignOut={handleSignOut}
+          signingOut={signingOut}
+          onUploadResume={() => setShowResumeModal(true)}
+        />
+      )}
+
+      {/* Resume upload modal */}
+      {showResumeModal && (
+        <ResumeUploadModal
+          onFile={handleResumeFile}
+          loading={uploadLoading}
+          onClose={() => setShowResumeModal(false)}
+        />
+      )}
     </div>
   );
 }
