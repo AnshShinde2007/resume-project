@@ -21,6 +21,7 @@ export interface ParsedResume {
   skills: string[];
   projects: Project[];
   education: Education[];
+  experience: string;
   rawText: string;
 }
 
@@ -445,6 +446,7 @@ export function parseResumeText(rawText: string): ParsedResume {
     linkedin: extractLinkedIn(rawText),
     github: extractGitHub(rawText),
     summary: extractSummary(sections),
+    experience: sections["experience"] ?? "",
     skills: extractSkills(rawText, sections),
     projects: extractProjects(sections),
     education: extractEducation(sections, rawText),

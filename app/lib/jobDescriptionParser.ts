@@ -105,37 +105,44 @@ const JOB_TITLE_INDICATORS = [
   "scientist", "specialist", "lead", "director", "officer", "head", "vp",
   "intern", "consultant", "associate", "coordinator", "administrator",
   "product", "software", "data", "devops", "cloud", "fullstack", "frontend",
-  "backend", "mobile", "qa", "sre", "ml", "ai",
+  "backend", "mobile", "qa", "sre", "ml", "ai", "stack", "ui", "ux", "web",
+  "security", "infrastructure", "systems", "embedded", "firmware",
 ];
 
 function extractTitle(lines: string[], sections: Record<string, string>): string {
-  // 1. Explicit "Position / Role / Job Title:" label anywhere in first 30 lines
+  // 1. Explicit labels
   const first30 = lines.slice(0, 30).join("\n");
   const labelMatch = first30.match(
     /(?:position|role|job\s+title|opening|vacancy)\s*:\s*(.+)/i
   );
-  if (labelMatch) return labelMatch[1].trim().slice(0, 100);
+  if (labelMatch && labelMatch[1].trim().length > 2) return labelMatch[1].trim().slice(0, 100);
 
-  // 2. Heuristic: first line that contains a job-title indicator word
+  // 2. Heuristic: Check first 20 lines for common title indicators
   for (const line of lines.slice(0, 20)) {
     const t = line.trim();
-    if (!t || t.length > 120) continue;
+    if (!t || t.length > 100 || t.length < 3) continue;
+    
+    // Skip common generic lines
+    if (/^[0-9\W]+$/.test(t)) continue; 
+    
     const lower = t.toLowerCase();
     if (JOB_TITLE_INDICATORS.some((kw) => lower.includes(kw))) {
-      // Make sure it's not a sentence (too many words = paragraph)
-      if (t.split(/\s+/).length <= 10) return t;
+      const words = t.split(/\s+/);
+      if (words.length <= 12) return t;
     }
   }
 
-  // 3. Fall back: first non-empty, non-URL line that looks like a title (≤8 words)
-  for (const line of lines.slice(0, 10)) {
+  // 3. Last resort: First non-empty line that isn't a URL/Email
+  for (const line of lines.slice(0, 5)) {
     const t = line.trim();
-    if (!t || /https?:\/\//i.test(t)) continue;
-    if (t.split(/\s+/).length <= 8 && /[A-Z]/.test(t)) return t;
+    if (t.length > 2 && t.length < 80 && !t.includes("@") && !t.includes("http")) {
+      return t;
+    }
   }
 
   return "";
 }
+
 
 // ─── Company ──────────────────────────────────────────────────────────────────
 

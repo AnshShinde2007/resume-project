@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenerativeAI, Content } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY ?? "" });
 
 export async function POST(req: NextRequest) {
   try {
-    const { history, userMessage, jd, resumeSkills, resumeName } = await req.json() as {
+    const { history, userMessage, jd, resumeSkills, resumeProjects, resumeEducation, resumeExperience, resumeName, difficulty } = await req.json() as {
       history: { role: "user" | "model"; text: string }[];
       userMessage: string;
       jd: {
@@ -14,11 +14,17 @@ export async function POST(req: NextRequest) {
         experienceRequired?: string;
         responsibilities?: string[];
         qualifications?: string[];
+        niceToHave?: string[];
+        salaryRange?: string;
         skills?: string[];
         summary?: string;
       } | null;
       resumeSkills: string[];
+      resumeProjects?: { name: string; description: string; technologies: string[] }[];
+      resumeEducation?: { degree: string; institution: string; year: string }[];
+      resumeExperience?: string;
       resumeName: string;
+      difficulty?: string;
     };
 
     if (!process.env.GEMINI_API_KEY) {
@@ -26,61 +32,71 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── Build system prompt ──────────────────────────────────────────────────
-    const jdContext = jd
-      ? `
-Job Description Context:
-- Role: ${jd.title ?? "N/A"}
-- Company: ${jd.company ?? "N/A"}
-- Experience Required: ${jd.experienceRequired ?? "N/A"}
-- Key Skills Required: ${(jd.skills ?? []).join(", ") || "N/A"}
-- Summary: ${jd.summary ?? "N/A"}
-- Responsibilities: ${(jd.responsibilities ?? []).slice(0, 5).map((r, i) => `${i + 1}. ${r}`).join(" ")}
-- Qualifications: ${(jd.qualifications ?? []).slice(0, 4).map((q, i) => `${i + 1}. ${q}`).join(" ")}
-`.trim()
-      : "No job description provided — conduct a general software engineering interview.";
+    const jdSkills = (jd?.skills || []).concat(jd?.qualifications || []).join(", ");
+    const jdNiceToHave = (jd?.niceToHave || []).join(", ");
 
-    const candidateContext = resumeName
-      ? `Candidate Name: ${resumeName}. Candidate Skills from Resume: ${resumeSkills.join(", ") || "unknown"}.`
-      : "No resume uploaded — ask general questions.";
+    const contextProjects = (resumeProjects || []).filter(p => !!p.name).map(p => `${p.name} - ${p.description}`).join("; ") || "None";
+    const contextEducation = (resumeEducation || []).filter(e => !!e.degree).map(e => `${e.degree} from ${e.institution} (${e.year})`).join("; ") || "None";
 
-    const systemInstruction = `You are an expert AI technical interviewer conducting a realistic mock job interview. Your tone is professional, encouraging, and constructive.
+    const systemInstruction = `You are a strict technical interviewer.
 
-${jdContext}
+Target Difficulty: ${difficulty || "Appropriate for the role"}
 
-${candidateContext}
+Context:
+Skills: ${resumeSkills.join(", ") || "None"}
+Projects: ${contextProjects}
+Education: ${contextEducation}
+Experience: ${resumeExperience || "None"}
 
-Guidelines:
-- Ask ONE focused interview question per response. Never ask multiple questions at once.
-- Start the conversation by introducing yourself briefly and asking the first question.
-- Progress naturally: start with intro/background, then technical questions, then behavioral, then system design if relevant, then closing.
-- Reference the job description and candidate's known skills when formulating questions to make it specific and realistic.
-- After the candidate answers, give brief, constructive feedback (1-2 sentences) before asking the next question.
-- Keep responses concise — under 120 words per turn unless giving detailed feedback.
-- Use **bold** for key terms when needed.
-- Do NOT reveal that you are an AI model or mention "Gemini". You are the human interviewer for this role.`;
+JD:
+* Mandatory: ${jdSkills || "None"}
+* Nice: ${jdNiceToHave || "None"}
+* Salary: ${jd?.salaryRange || "None"}
 
-    // ─── Build conversation history for Gemini ────────────────────────────────
-    const formattedHistory: Content[] = history.map(h => ({
-      role: h.role,
-      parts: [{ text: h.text }],
-    }));
+Rules:
+* Ask 1 question at a time
+* Prioritize Mandatory > Nice > Projects
+* Adjust difficulty based on Target Difficulty + Experience
+* Start basic → go deeper
+* Weak answer → probe deeper
+* Strong answer → increase difficulty
+* Challenge answers below expected level
+* No full answers
 
-    // ─── Start chat ───────────────────────────────────────────────────────────
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash-preview-04-17",
-      systemInstruction,
-    });
+Eval:
+* 1-line feedback + next question
 
-    const chat = model.startChat({
-      history: formattedHistory,
-      generationConfig: {
+Focus:
+* Test mandatory skills deeply
+* Use projects for real-world + system questions
+
+End:
+* Short performance summary (skills, gaps, level vs salary)`;
+
+    // ─── Build contents array (history + current user message) ───────────────
+    const contents = [
+      ...history.map(h => ({
+        role: h.role,
+        parts: [{ text: h.text }],
+      })),
+      {
+        role: "user" as const,
+        parts: [{ text: userMessage }],
+      },
+    ];
+
+    // ─── Call Gemini via new SDK ──────────────────────────────────────────────
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents,
+      config: {
+        systemInstruction,
         maxOutputTokens: 512,
         temperature: 0.8,
       },
     });
 
-    const result = await chat.sendMessage(userMessage);
-    const text = result.response.text();
+    const text = response.text;
 
     return NextResponse.json({ text });
   } catch (err) {
