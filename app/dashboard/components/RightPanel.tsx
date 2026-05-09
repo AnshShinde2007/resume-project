@@ -141,8 +141,8 @@ export function RightPanel({
                     <div key={proj.id} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-subtle)", borderRadius: "12px", overflow: "hidden", transition: "border-color 0.2s" }}
                       onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(124,111,247,0.3)")}
                       onMouseLeave={e => (e.currentTarget.style.borderColor = "var(--border-subtle)")}>
-                      {proj.imageBase64 && (
-                        <img src={proj.imageBase64} alt={proj.name} style={{ width: "100%", height: 100, objectFit: "cover", display: "block" }} />
+                      {proj.imageUrl && (
+                        <img src={proj.imageUrl} alt={proj.name} style={{ width: "100%", height: 100, objectFit: "cover", display: "block" }} />
                       )}
                       <div style={{ padding: "0.75rem" }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.5rem" }}>
