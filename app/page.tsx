@@ -1,427 +1,358 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "./context/AuthContext";
 
-// ─── Animated particle canvas ──────────────────────────────────────────────────
-function ParticleCanvas() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    let w = (canvas.width = window.innerWidth);
-    let h = (canvas.height = window.innerHeight);
-
-    const particles: { x: number; y: number; vx: number; vy: number; r: number; alpha: number }[] = [];
-    for (let i = 0; i < 60; i++) {
-      particles.push({
-        x: Math.random() * w, y: Math.random() * h,
-        vx: (Math.random() - 0.5) * 0.4, vy: (Math.random() - 0.5) * 0.4,
-        r: Math.random() * 2 + 0.5,
-        alpha: Math.random() * 0.5 + 0.1,
-      });
-    }
-
-    let raf: number;
-    function draw() {
-      if (!ctx) return;
-      ctx.clearRect(0, 0, w, h);
-      for (const p of particles) {
-        p.x += p.vx; p.y += p.vy;
-        if (p.x < 0) p.x = w; if (p.x > w) p.x = 0;
-        if (p.y < 0) p.y = h; if (p.y > h) p.y = 0;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(124,111,247,${p.alpha})`;
-        ctx.fill();
-      }
-      // Draw connections
-      for (let i = 0; i < particles.length; i++) {
-        for (let j = i + 1; j < particles.length; j++) {
-          const dx = particles[i].x - particles[j].x;
-          const dy = particles[i].y - particles[j].y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 120) {
-            ctx.beginPath();
-            ctx.moveTo(particles[i].x, particles[i].y);
-            ctx.lineTo(particles[j].x, particles[j].y);
-            ctx.strokeStyle = `rgba(124,111,247,${0.08 * (1 - dist / 120)})`;
-            ctx.stroke();
-          }
-        }
-      }
-      raf = requestAnimationFrame(draw);
-    }
-    draw();
-
-    const onResize = () => {
-      w = canvas.width = window.innerWidth;
-      h = canvas.height = window.innerHeight;
-    };
-    window.addEventListener("resize", onResize);
-    return () => { cancelAnimationFrame(raf); window.removeEventListener("resize", onResize); };
-  }, []);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      style={{ position: "fixed", inset: 0, zIndex: 0, pointerEvents: "none", opacity: 0.7 }}
-    />
-  );
-}
-
-// ─── Feature Card ──────────────────────────────────────────────────────────────
-function FeatureCard({ icon, title, desc, delay }: { icon: string; title: string; desc: string; delay: string }) {
-  return (
-    <div
-      className="feature-card"
-      style={{
-        background: "rgba(22,22,31,0.8)",
-        border: "1px solid rgba(124,111,247,0.15)",
-        borderRadius: "1.5rem",
-        padding: "2rem",
-        backdropFilter: "blur(12px)",
-        transition: "all 0.3s ease",
-        animation: `fadeInUp 0.7s ease ${delay} both`,
-        cursor: "default",
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLDivElement).style.border = "1px solid rgba(124,111,247,0.4)";
-        (e.currentTarget as HTMLDivElement).style.background = "rgba(124,111,247,0.08)";
-        (e.currentTarget as HTMLDivElement).style.transform = "translateY(-4px)";
-        (e.currentTarget as HTMLDivElement).style.boxShadow = "0 20px 60px rgba(124,111,247,0.15)";
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLDivElement).style.border = "1px solid rgba(124,111,247,0.15)";
-        (e.currentTarget as HTMLDivElement).style.background = "rgba(22,22,31,0.8)";
-        (e.currentTarget as HTMLDivElement).style.transform = "translateY(0)";
-        (e.currentTarget as HTMLDivElement).style.boxShadow = "none";
-      }}
-    >
-      <div style={{
-        width: 56, height: 56, borderRadius: "1rem",
-        background: "linear-gradient(135deg, rgba(124,111,247,0.25), rgba(34,211,238,0.12))",
-        border: "1px solid rgba(124,111,247,0.3)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: "1.6rem", marginBottom: "1.25rem",
-      }}>{icon}</div>
-      <h3 style={{ fontWeight: 700, fontSize: "1.1rem", marginBottom: "0.6rem", color: "var(--text-primary)" }}>{title}</h3>
-      <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: 1.7 }}>{desc}</p>
-    </div>
-  );
-}
-
-// ─── Step Card ────────────────────────────────────────────────────────────────
-function StepCard({ num, title, desc, delay }: { num: string; title: string; desc: string; delay: string }) {
-  return (
-    <div style={{
-      display: "flex", gap: "1.5rem", alignItems: "flex-start",
-      animation: `fadeInUp 0.7s ease ${delay} both`,
-    }}>
-      <div style={{
-        width: 48, height: 48, borderRadius: "50%", flexShrink: 0,
-        background: "linear-gradient(135deg, #7c6ff7, #22d3ee)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        fontWeight: 800, fontSize: "1.1rem", color: "#fff",
-        boxShadow: "0 0 24px rgba(124,111,247,0.4)",
-      }}>{num}</div>
-      <div>
-        <h3 style={{ fontWeight: 700, marginBottom: "0.4rem", fontSize: "1rem" }}>{title}</h3>
-        <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", lineHeight: 1.7 }}>{desc}</p>
-      </div>
-    </div>
-  );
-}
-
-// ─── Landing Page ─────────────────────────────────────────────────────────────
 export default function LandingPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
 
-  // If already logged in, redirect to dashboard
   useEffect(() => {
     if (!loading && user) {
       router.replace("/dashboard");
     }
   }, [user, loading, router]);
 
-  if (loading) {
-    return (
-      <div style={{ minHeight: "100vh", background: "var(--bg-primary)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{
-          width: 48, height: 48, borderRadius: "50%",
-          border: "3px solid rgba(124,111,247,0.2)",
-          borderTopColor: "#7c6ff7",
-          animation: "spin-slow 0.8s linear infinite",
-        }} />
-      </div>
-    );
-  }
+  if (loading) return <div style={{ background: "#05050A", height: "100vh" }} />;
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg-primary)", overflowX: "hidden" }}>
-      <ParticleCanvas />
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700;800;900&display=swap');
+        
+        .glass-bg {
+          background-color: #05050A;
+          color: #FFFFFF;
+          font-family: 'Outfit', sans-serif;
+          min-height: 100vh;
+          overflow-x: hidden;
+          position: relative;
+        }
 
-      {/* Ambient blobs */}
-      <div style={{ position: "fixed", top: "5%", left: "10%", width: 500, height: 500, borderRadius: "50%", background: "radial-gradient(circle, rgba(124,111,247,0.07), transparent 65%)", pointerEvents: "none", zIndex: 0 }} />
-      <div style={{ position: "fixed", bottom: "10%", right: "5%", width: 400, height: 400, borderRadius: "50%", background: "radial-gradient(circle, rgba(34,211,238,0.06), transparent 65%)", pointerEvents: "none", zIndex: 0 }} />
+        /* Abstract glowing orbs */
+        .orb {
+          position: absolute;
+          border-radius: 50%;
+          filter: blur(100px);
+          opacity: 0.5;
+          z-index: 0;
+          animation: float 20s infinite ease-in-out alternate;
+        }
 
-      {/* ── Navbar ─────────────────────────────────────────────────────────── */}
-      <nav style={{
-        position: "sticky", top: 0, zIndex: 100,
-        padding: "1rem 2rem",
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        borderBottom: "1px solid rgba(255,255,255,0.05)",
-        backdropFilter: "blur(24px)",
-        background: "rgba(10,10,15,0.75)",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", fontWeight: 800, fontSize: "1.2rem", letterSpacing: "-0.02em" }}>
-          <span style={{
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            width: 34, height: 34, borderRadius: "8px",
-            background: "linear-gradient(135deg, #7c6ff7, #22d3ee)", fontSize: "1rem",
-          }}>📄</span>
-          <span style={{ background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>ResumeAI</span>
-        </div>
-        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
-          <button
-            id="nav-login-btn"
-            onClick={() => router.push("/auth?mode=login")}
-            style={{
-              background: "transparent", border: "1px solid rgba(124,111,247,0.35)",
-              color: "var(--text-secondary)", padding: "0.5rem 1.25rem",
-              borderRadius: "100px", cursor: "pointer", fontSize: "0.875rem", fontWeight: 600,
-              transition: "all 0.2s",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#7c6ff7"; (e.currentTarget as HTMLButtonElement).style.color = "#c4b5fd"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(124,111,247,0.35)"; (e.currentTarget as HTMLButtonElement).style.color = "var(--text-secondary)"; }}
-          >
-            Log in
-          </button>
-          <button
-            id="nav-signup-btn"
-            onClick={() => router.push("/auth?mode=signup")}
-            style={{
-              background: "linear-gradient(135deg, #7c6ff7, #a78bfa)",
-              border: "none", color: "#fff", padding: "0.55rem 1.4rem",
-              borderRadius: "100px", cursor: "pointer", fontSize: "0.875rem", fontWeight: 700,
-              boxShadow: "0 4px 20px rgba(124,111,247,0.35)", transition: "all 0.2s",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-1px)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 30px rgba(124,111,247,0.5)"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 4px 20px rgba(124,111,247,0.35)"; }}
-          >
-            Get Started Free
-          </button>
-        </div>
-      </nav>
+        .orb-1 {
+          width: 600px;
+          height: 600px;
+          background: linear-gradient(135deg, #7C6FF7, #FF2E93);
+          top: -10%;
+          left: -10%;
+        }
 
-      {/* ── Hero ───────────────────────────────────────────────────────────── */}
-      <section style={{ position: "relative", zIndex: 1, textAlign: "center", padding: "7rem 1.5rem 5rem" }}>
-        <div style={{
-          display: "inline-flex", alignItems: "center", gap: "0.5rem",
-          background: "rgba(124,111,247,0.12)", border: "1px solid rgba(124,111,247,0.3)",
-          borderRadius: "100px", padding: "0.4rem 1.1rem", marginBottom: "2rem",
-          fontSize: "0.82rem", color: "#c4b5fd", letterSpacing: "0.08em", fontWeight: 600,
-          animation: "fadeInUp 0.6s ease both",
-        }}>
-          <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: "#a78bfa", animation: "pulse-glow 2s ease-in-out infinite" }} />
-          AI-Powered Resume Intelligence
-        </div>
+        .orb-2 {
+          width: 500px;
+          height: 500px;
+          background: linear-gradient(135deg, #22D3EE, #7C6FF7);
+          bottom: 20%;
+          right: -5%;
+          animation-delay: -5s;
+        }
 
-        <h1 style={{
-          fontSize: "clamp(2.5rem, 6vw, 4.5rem)", fontWeight: 900,
-          lineHeight: 1.08, letterSpacing: "-0.04em", marginBottom: "1.5rem",
-          background: "linear-gradient(135deg, #f0f0ff 0%, #c4b5fd 45%, #67e8f9 100%)",
-          backgroundSize: "200% auto",
-          WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
-          animation: "gradient-shift 5s ease infinite, fadeInUp 0.7s ease 0.1s both",
-        }}>
-          Turn Your Resume<br />Into a Stunning Profile
-        </h1>
+        .orb-3 {
+          width: 400px;
+          height: 400px;
+          background: linear-gradient(135deg, #FF9A9E, #FECFEF);
+          top: 40%;
+          left: 30%;
+          opacity: 0.3;
+          animation-delay: -10s;
+        }
 
-        <p style={{
-          color: "var(--text-secondary)", fontSize: "clamp(1rem, 2vw, 1.25rem)",
-          maxWidth: 560, margin: "0 auto 2.5rem",
-          lineHeight: 1.7, animation: "fadeInUp 0.7s ease 0.2s both",
-        }}>
-          Upload any resume and instantly extract your name, skills, projects, and education — saved securely to your personal profile.
-        </p>
+        @keyframes float {
+          0% { transform: translate(0, 0) scale(1); }
+          100% { transform: translate(50px, 50px) scale(1.1); }
+        }
 
-        <div style={{ display: "flex", gap: "1rem", justifyContent: "center", flexWrap: "wrap", animation: "fadeInUp 0.7s ease 0.3s both" }}>
-          <button
-            id="hero-signup-btn"
-            onClick={() => router.push("/auth?mode=signup")}
-            style={{
-              background: "linear-gradient(135deg, #7c6ff7, #a78bfa)",
-              border: "none", color: "#fff", padding: "0.9rem 2.2rem",
-              borderRadius: "100px", cursor: "pointer", fontSize: "1rem", fontWeight: 700,
-              boxShadow: "0 8px 32px rgba(124,111,247,0.4)", transition: "all 0.25s",
-              letterSpacing: "-0.01em",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-2px)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 14px 40px rgba(124,111,247,0.55)"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 32px rgba(124,111,247,0.4)"; }}
-          >
-            Start for Free →
-          </button>
-          <button
-            id="hero-demo-btn"
-            onClick={() => router.push("/auth?mode=login")}
-            style={{
-              background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)",
-              color: "var(--text-primary)", padding: "0.9rem 2.2rem",
-              borderRadius: "100px", cursor: "pointer", fontSize: "1rem", fontWeight: 600,
-              transition: "all 0.25s", backdropFilter: "blur(8px)",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.09)"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.05)"; }}
-          >
-            Sign in
-          </button>
-        </div>
+        .glass-container {
+          position: relative;
+          z-index: 1;
+          max-width: 1400px;
+          margin: 0 auto;
+        }
 
-        {/* Trust badges */}
-        <div style={{ display: "flex", gap: "2rem", justifyContent: "center", marginTop: "3.5rem", flexWrap: "wrap", animation: "fadeInUp 0.7s ease 0.4s both" }}>
-          {[["🔒", "End-to-end secure"], ["⚡", "Instant parsing"], ["☁️", "Cloud saved"], ["🆓", "Free to use"]].map(([icon, label]) => (
-            <div key={label} style={{ display: "flex", alignItems: "center", gap: "0.4rem", color: "var(--text-muted)", fontSize: "0.85rem" }}>
-              <span>{icon}</span><span>{label}</span>
+        .glass-card {
+          background: rgba(255, 255, 255, 0.03);
+          backdrop-filter: blur(24px);
+          -webkit-backdrop-filter: blur(24px);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-top: 1px solid rgba(255, 255, 255, 0.2);
+          border-left: 1px solid rgba(255, 255, 255, 0.2);
+          box-shadow: 0 30px 60px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+          border-radius: 32px;
+          padding: 3rem;
+          transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+        }
+
+        .glass-card:hover {
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          box-shadow: 0 40px 80px rgba(124, 111, 247, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+          transform: translateY(-5px);
+        }
+
+        .hero-title {
+          font-size: clamp(3.5rem, 8vw, 6.5rem);
+          font-weight: 800;
+          line-height: 1.05;
+          letter-spacing: -0.04em;
+          margin-bottom: 1.5rem;
+          background: linear-gradient(to right, #FFFFFF, #A5A5A5);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+        }
+
+        .hero-subtitle {
+          font-size: clamp(1.1rem, 2vw, 1.3rem);
+          color: rgba(255, 255, 255, 0.7);
+          line-height: 1.6;
+          max-width: 600px;
+          margin-bottom: 3rem;
+          font-weight: 300;
+        }
+
+        .glass-btn {
+          background: rgba(255, 255, 255, 0.1);
+          backdrop-filter: blur(10px);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          border-radius: 100px;
+          color: #FFF;
+          font-family: 'Outfit', sans-serif;
+          font-size: 1.1rem;
+          font-weight: 600;
+          padding: 1.2rem 2.5rem;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          display: inline-flex;
+          align-items: center;
+          gap: 0.8rem;
+          box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .glass-btn-primary {
+          background: linear-gradient(135deg, rgba(124, 111, 247, 0.8), rgba(255, 46, 147, 0.8));
+          border: 1px solid rgba(255, 255, 255, 0.3);
+          box-shadow: 0 10px 30px rgba(124, 111, 247, 0.3), inset 0 1px 0 rgba(255,255,255,0.4);
+        }
+
+        .glass-btn:hover {
+          transform: translateY(-3px) scale(1.02);
+          background: rgba(255, 255, 255, 0.15);
+        }
+
+        .glass-btn-primary:hover {
+          background: linear-gradient(135deg, rgba(124, 111, 247, 1), rgba(255, 46, 147, 1));
+          box-shadow: 0 15px 40px rgba(124, 111, 247, 0.5), inset 0 1px 0 rgba(255,255,255,0.5);
+        }
+
+        .feature-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+          gap: 2rem;
+          margin-top: 5rem;
+        }
+
+        .icon-box {
+          width: 60px;
+          height: 60px;
+          border-radius: 16px;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          display: flex;
+          align-items: center;
+          justifyContent: center;
+          font-size: 1.8rem;
+          margin-bottom: 1.5rem;
+          box-shadow: inset 0 2px 20px rgba(255,255,255,0.05);
+        }
+
+        .text-gradient {
+          background: linear-gradient(135deg, #7C6FF7, #22D3EE);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+        }
+
+        /* Mockup Window */
+        .glass-mockup {
+          position: absolute;
+          right: -10%;
+          top: 15%;
+          width: 700px;
+          height: 500px;
+          background: rgba(20, 20, 25, 0.6);
+          backdrop-filter: blur(40px);
+          -webkit-backdrop-filter: blur(40px);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 24px;
+          box-shadow: 0 40px 100px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05);
+          transform: perspective(1000px) rotateY(-15deg) rotateX(5deg);
+          overflow: hidden;
+          display: none;
+        }
+
+        .mockup-header {
+          height: 40px;
+          background: rgba(255, 255, 255, 0.05);
+          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          display: flex;
+          align-items: center;
+          padding: 0 1rem;
+          gap: 0.5rem;
+        }
+
+        .dot { width: 12px; height: 12px; border-radius: 50%; }
+        .dot-r { background: #FF5F56; }
+        .dot-y { background: #FFBD2E; }
+        .dot-g { background: #27C93F; }
+
+        @media (min-width: 1024px) {
+          .glass-mockup { display: block; }
+          .hero-content { max-width: 60%; }
+        }
+      `}</style>
+
+      <div className="glass-bg">
+        {/* Background Orbs */}
+        <div className="orb orb-1" />
+        <div className="orb orb-2" />
+        <div className="orb orb-3" />
+
+        {/* Navigation */}
+        <nav style={{ position: "relative", zIndex: 10, padding: "2rem 4vw", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: "1.5rem", fontWeight: 800, letterSpacing: "-0.03em", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: "linear-gradient(135deg, #7C6FF7, #22D3EE)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <span style={{ fontSize: "1.2rem" }}>📄</span>
             </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Mock UI Preview ─────────────────────────────────────────────────── */}
-      <section style={{ position: "relative", zIndex: 1, padding: "0 1.5rem 6rem", maxWidth: 800, margin: "0 auto" }}>
-        <div style={{
-          background: "linear-gradient(135deg, rgba(124,111,247,0.1), rgba(34,211,238,0.05))",
-          border: "1px solid rgba(124,111,247,0.2)",
-          borderRadius: "2rem",
-          padding: "2rem",
-          backdropFilter: "blur(20px)",
-          boxShadow: "0 40px 100px rgba(124,111,247,0.12)",
-          animation: "fadeInUp 0.8s ease 0.4s both",
-        }}>
-          {/* Fake browser chrome */}
-          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem" }}>
-            {["#ff5f56", "#ffbd2e", "#27c93f"].map(c => (
-              <div key={c} style={{ width: 12, height: 12, borderRadius: "50%", background: c }} />
-            ))}
+            Resume<span className="text-gradient">AI</span>
           </div>
-          {/* Mock profile */}
-          <div style={{ display: "flex", gap: "1.5rem", alignItems: "center", flexWrap: "wrap" }}>
-            <div style={{
-              width: 70, height: 70, borderRadius: "50%",
-              background: "linear-gradient(135deg, #7c6ff7, #22d3ee)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontWeight: 800, fontSize: "1.6rem", color: "#fff",
-              boxShadow: "0 0 24px rgba(124,111,247,0.5)",
-            }}>AJ</div>
-            <div>
-              <div style={{ fontWeight: 800, fontSize: "1.4rem", background: "linear-gradient(135deg, #f0f0ff, #c4b5fd)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>Alex Johnson</div>
-              <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem", marginTop: "0.25rem" }}>✉️ alex@example.com &nbsp; 📍 San Francisco, CA</div>
+          <div style={{ display: "flex", gap: "1rem" }}>
+            <button className="glass-btn" style={{ padding: "0.6rem 1.5rem", fontSize: "0.95rem" }} onClick={() => router.push("/auth?mode=login")}>Sign In</button>
+            <button className="glass-btn glass-btn-primary" style={{ padding: "0.6rem 1.5rem", fontSize: "0.95rem" }} onClick={() => router.push("/auth?mode=signup")}>Start Free</button>
+          </div>
+        </nav>
+
+        {/* Hero Section */}
+        <div className="glass-container" style={{ padding: "4rem 4vw", position: "relative", minHeight: "80vh", display: "flex", alignItems: "center" }}>
+          
+          <div className="hero-content" style={{ position: "relative", zIndex: 10 }}>
+            <div style={{ 
+              display: "inline-flex", alignItems: "center", gap: "0.5rem",
+              background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: "100px", padding: "0.4rem 1.2rem", marginBottom: "2rem",
+              fontSize: "0.85rem", fontWeight: 600, backdropFilter: "blur(10px)"
+            }}>
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#22D3EE", boxShadow: "0 0 10px #22D3EE" }} />
+              Premium AI Interview Simulation
             </div>
-            <div style={{ marginLeft: "auto", display: "flex", gap: "0.75rem" }}>
-              {[["24", "Skills"], ["8", "Projects"], ["2", "Degrees"]].map(([val, lbl]) => (
-                <div key={lbl} style={{ textAlign: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "0.875rem", padding: "0.6rem 1rem" }}>
-                  <div style={{ fontWeight: 800, fontSize: "1.4rem", background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>{val}</div>
-                  <div style={{ color: "var(--text-muted)", fontSize: "0.7rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>{lbl}</div>
+
+            <h1 className="hero-title">
+              Master the<br/>
+              Technical<br/>
+              <span className="text-gradient">Interview.</span>
+            </h1>
+
+            <p className="hero-subtitle">
+              Upload your resume and the target job description. Face a relentless, context-aware AI that parses your experience and interrogates your weaknesses with realistic system design scenarios.
+            </p>
+
+            <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+              <button className="glass-btn glass-btn-primary" onClick={() => router.push("/auth?mode=signup")}>
+                Begin Simulation
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>
+              </button>
+              <button className="glass-btn" onClick={() => router.push("/auth?mode=login")}>
+                View Dashboard
+              </button>
+            </div>
+          </div>
+
+          {/* Abstract Glass Mockup */}
+          <div className="glass-mockup">
+            <div className="mockup-header">
+              <div className="dot dot-r"></div>
+              <div className="dot dot-y"></div>
+              <div className="dot dot-g"></div>
+            </div>
+            <div style={{ padding: "2rem", display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+              <div style={{ display: "flex", gap: "1.5rem", alignItems: "center" }}>
+                <div style={{ width: 80, height: 80, borderRadius: "50%", background: "linear-gradient(135deg, #7C6FF7, #FF2E93)", padding: 3 }}>
+                  <div style={{ width: "100%", height: "100%", background: "#1A1A24", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.5rem", fontWeight: 800 }}>AJ</div>
                 </div>
-              ))}
+                <div>
+                  <div style={{ fontSize: "1.4rem", fontWeight: 800, marginBottom: "0.25rem" }}>Alex Johnson</div>
+                  <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.9rem" }}>Senior Full Stack Engineer</div>
+                </div>
+              </div>
+              
+              <div style={{ display: "flex", gap: "1rem" }}>
+                {[ {l: "Skills", v: "24"}, {l: "Projects", v: "8"}, {l: "Simulations", v: "12"} ].map(item => (
+                  <div key={item.l} style={{ flex: 1, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 16, padding: "1.2rem", textAlign: "center" }}>
+                    <div style={{ fontSize: "1.8rem", fontWeight: 800, color: "#22D3EE", marginBottom: "0.2rem" }}>{item.v}</div>
+                    <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.5)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{item.l}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ background: "rgba(124, 111, 247, 0.1)", border: "1px solid rgba(124, 111, 247, 0.2)", borderRadius: 16, padding: "1.5rem", marginTop: "0.5rem" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.8rem", marginBottom: "1rem" }}>
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#22D3EE", boxShadow: "0 0 10px #22D3EE" }} />
+                  <span style={{ fontWeight: 600, fontSize: "0.9rem", color: "#22D3EE" }}>AI Interrogation Active</span>
+                </div>
+                <div style={{ fontSize: "0.95rem", color: "rgba(255,255,255,0.8)", lineHeight: 1.6 }}>
+                  "I see you used Next.js and Redis on your E-commerce project. Explain how you handled cache invalidation when product inventory changed rapidly during a flash sale."
+                </div>
+              </div>
             </div>
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "1.5rem" }}>
-            {["React", "TypeScript", "Node.js", "Python", "AWS", "Docker", "PostgreSQL", "Next.js"].map((s, i) => {
-              const colors = [
-                { bg: "rgba(124,111,247,0.18)", border: "rgba(124,111,247,0.4)", text: "#c4b5fd" },
-                { bg: "rgba(34,211,238,0.14)", border: "rgba(34,211,238,0.35)", text: "#67e8f9" },
-              ];
-              const c = colors[i % 2];
-              return <span key={s} style={{ padding: "0.3rem 0.8rem", borderRadius: "100px", background: c.bg, border: `1px solid ${c.border}`, color: c.text, fontSize: "0.8rem", fontWeight: 600 }}>{s}</span>;
-            })}
+
+        </div>
+
+        {/* Features Section */}
+        <div className="glass-container" style={{ padding: "4rem 4vw 8rem" }}>
+          <div style={{ textAlign: "center", marginBottom: "2rem" }}>
+            <h2 style={{ fontSize: "clamp(2rem, 4vw, 3rem)", fontWeight: 800, marginBottom: "1rem" }}>Designed for Excellence</h2>
+            <p style={{ color: "rgba(255,255,255,0.6)", fontSize: "1.1rem", maxWidth: 600, margin: "0 auto" }}>Everything you need to prepare for high-stakes technical interviews.</p>
+          </div>
+
+          <div className="feature-grid">
+            <div className="glass-card">
+              <div className="icon-box">📄</div>
+              <h3 style={{ fontSize: "1.3rem", fontWeight: 700, marginBottom: "1rem" }}>Intelligent Parsing</h3>
+              <p style={{ color: "rgba(255,255,255,0.6)", lineHeight: 1.6 }}>
+                Upload any PDF. Our engine extracts your skills, dissects project architecture, and builds your profile instantly.
+              </p>
+            </div>
+            
+            <div className="glass-card">
+              <div className="icon-box">🎯</div>
+              <h3 style={{ fontSize: "1.3rem", fontWeight: 700, marginBottom: "1rem" }}>Context-Aware</h3>
+              <p style={{ color: "rgba(255,255,255,0.6)", lineHeight: 1.6 }}>
+                We consume the target Job Description to separate mandatory skills from nice-to-haves and adjust the difficulty dynamically.
+              </p>
+            </div>
+            
+            <div className="glass-card">
+              <div className="icon-box">⚡</div>
+              <h3 style={{ fontSize: "1.3rem", fontWeight: 700, marginBottom: "1rem" }}>Dynamic Scaling</h3>
+              <p style={{ color: "rgba(255,255,255,0.6)", lineHeight: 1.6 }}>
+                A sequential gauntlet. Weak answers invite painful probing. Strong answers immediately escalate the system design complexity.
+              </p>
+            </div>
           </div>
         </div>
-      </section>
 
-      {/* ── Features ───────────────────────────────────────────────────────── */}
-      <section style={{ position: "relative", zIndex: 1, padding: "4rem 1.5rem", maxWidth: 1100, margin: "0 auto" }}>
-        <div style={{ textAlign: "center", marginBottom: "3.5rem", animation: "fadeInUp 0.7s ease both" }}>
-          <div style={{ fontSize: "0.8rem", fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", color: "#a78bfa", marginBottom: "0.75rem" }}>Features</div>
-          <h2 style={{ fontSize: "clamp(1.8rem, 4vw, 2.8rem)", fontWeight: 800, letterSpacing: "-0.03em" }}>Everything you need,<br />nothing you don&apos;t</h2>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1.25rem" }}>
-          <FeatureCard icon="🤖" title="Smart AI Parsing" desc="Extract name, email, phone, location, skills, projects, and education automatically from any PDF or text resume." delay="0.05s" />
-          <FeatureCard icon="☁️" title="Cloud Storage" desc="Every parsed resume is saved securely to your personal Firebase account. Access your profile from any device." delay="0.15s" />
-          <FeatureCard icon="🔐" title="Secure Auth" desc="Sign in with Google or email. Your data belongs to you — protected with Firebase Authentication." delay="0.25s" />
-          <FeatureCard icon="⚡" title="Instant Results" desc="Parsing happens in seconds. No server upload for PDF processing — your file never leaves your browser." delay="0.1s" />
-          <FeatureCard icon="🎨" title="Beautiful Profile" desc="Automatically categorised skills, project cards with tech stacks, and a sleek profile card — all generated for you." delay="0.2s" />
-          <FeatureCard icon="📱" title="Fully Responsive" desc="Looks great on desktop, tablet, and mobile. Your profile is always accessible wherever you are." delay="0.3s" />
-        </div>
-      </section>
+        <footer style={{ borderTop: "1px solid rgba(255,255,255,0.05)", padding: "2rem 4vw", textAlign: "center", position: "relative", zIndex: 10 }}>
+          <p style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.9rem" }}>© 2026 ResumeAI. Powered by Gemini & Firebase.</p>
+        </footer>
 
-      {/* ── How it works ────────────────────────────────────────────────────── */}
-      <section style={{ position: "relative", zIndex: 1, padding: "4rem 1.5rem 6rem", maxWidth: 680, margin: "0 auto" }}>
-        <div style={{ textAlign: "center", marginBottom: "3.5rem", animation: "fadeInUp 0.7s ease both" }}>
-          <div style={{ fontSize: "0.8rem", fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", color: "#a78bfa", marginBottom: "0.75rem" }}>How it works</div>
-          <h2 style={{ fontSize: "clamp(1.8rem, 4vw, 2.8rem)", fontWeight: 800, letterSpacing: "-0.03em" }}>Three steps to your profile</h2>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: "2.5rem" }}>
-          <StepCard num="1" title="Create your free account" desc="Sign up with Google or email in seconds. No credit card required." delay="0.05s" />
-          <StepCard num="2" title="Upload your resume" desc="Drag & drop your PDF or text resume. Our AI instantly parses every section." delay="0.15s" />
-          <StepCard num="3" title="View & save your profile" desc="Your parsed profile is displayed beautifully and saved to your Firebase account automatically." delay="0.25s" />
-        </div>
-      </section>
-
-      {/* ── CTA ─────────────────────────────────────────────────────────────── */}
-      <section style={{ position: "relative", zIndex: 1, padding: "4rem 1.5rem 8rem", textAlign: "center" }}>
-        <div style={{
-          maxWidth: 600, margin: "0 auto",
-          background: "linear-gradient(135deg, rgba(124,111,247,0.12), rgba(34,211,238,0.06))",
-          border: "1px solid rgba(124,111,247,0.25)",
-          borderRadius: "2rem", padding: "3.5rem 2rem",
-          backdropFilter: "blur(16px)",
-          boxShadow: "0 30px 80px rgba(124,111,247,0.12)",
-          animation: "fadeInUp 0.7s ease both",
-        }}>
-          <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>🚀</div>
-          <h2 style={{ fontSize: "clamp(1.6rem, 4vw, 2.2rem)", fontWeight: 800, letterSpacing: "-0.03em", marginBottom: "1rem" }}>
-            Ready to build your profile?
-          </h2>
-          <p style={{ color: "var(--text-secondary)", marginBottom: "2rem", lineHeight: 1.7 }}>
-            Join thousands of professionals who use ResumeAI to stand out.
-          </p>
-          <button
-            id="cta-signup-btn"
-            onClick={() => router.push("/auth?mode=signup")}
-            style={{
-              background: "linear-gradient(135deg, #7c6ff7, #a78bfa)",
-              border: "none", color: "#fff", padding: "1rem 2.5rem",
-              borderRadius: "100px", cursor: "pointer", fontSize: "1.05rem", fontWeight: 700,
-              boxShadow: "0 8px 32px rgba(124,111,247,0.4)", transition: "all 0.25s",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-2px)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 14px 40px rgba(124,111,247,0.55)"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 32px rgba(124,111,247,0.4)"; }}
-          >
-            Get Started — It&apos;s Free
-          </button>
-        </div>
-      </section>
-
-      {/* ── Footer ───────────────────────────────────────────────────────────── */}
-      <footer style={{
-        position: "relative", zIndex: 1,
-        textAlign: "center", padding: "2rem",
-        borderTop: "1px solid rgba(255,255,255,0.05)",
-        color: "var(--text-muted)", fontSize: "0.8rem",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.6rem", fontWeight: 800, fontSize: "1rem", marginBottom: "0.75rem" }}>
-          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: "7px", background: "linear-gradient(135deg, #7c6ff7, #22d3ee)", fontSize: "0.85rem" }}>📄</span>
-          <span style={{ background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>ResumeAI</span>
-        </div>
-        <p>Built with ✨ · Your data is private and secured by Firebase</p>
-      </footer>
-    </div>
+      </div>
+    </>
   );
 }
