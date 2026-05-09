@@ -95,7 +95,7 @@ export async function callGemini({
   resumeProjects: { name: string; description: string; technologies: string[] }[];
   summarizedProjects?: string;
   resumeEducation: { degree: string; institution: string; year: string }[];
-  resumeExperience: string;
+  resumeExperience: { company: string; role: string; duration: string; description: string; technologies?: string[] }[];
   resumeName: string;
   difficulty?: string;
 }): Promise<string> {
@@ -112,3 +112,18 @@ export async function callGemini({
   return data.text as string;
 }
 
+// ─── Call Feedback API ────────────────────────────────────────────────────────
+
+export async function generateFeedback(history: { role: string; content: string }[]): Promise<any> {
+  const res = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ history }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error ?? `API error ${res.status}`);
+  }
+  const data = await res.json();
+  return data.feedback;
+}

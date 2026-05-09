@@ -2,30 +2,62 @@
 import React, { useState, useRef } from "react";
 import { UserProject } from "../types";
 
+import { uploadProjectThumbnail } from "../../lib/storage";
+
 interface Props {
+  uid: string;
   onAdd: (project: UserProject) => void;
   onClose: () => void;
 }
 
-export function AddProjectModal({ onAdd, onClose }: Props) {
+export function AddProjectModal({ uid, onAdd, onClose }: Props) {
   const [name, setName] = useState("");
   const [link, setLink] = useState("");
   const [desc, setDesc] = useState("");
-  const [imageBase64, setImageBase64] = useState<string | undefined>(undefined);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [errors, setErrors] = useState<{ name?: string; desc?: string }>({});
   const fileRef = useRef<HTMLInputElement>(null);
 
   function handleImageFile(file: File) {
     if (!file.type.startsWith("image/")) return;
+    setSelectedFile(file);
     const reader = new FileReader();
     reader.onload = (e) => {
-      const result = e.target?.result as string;
-      setImageBase64(result);
-      setImagePreview(result);
+      setImagePreview(e.target?.result as string);
     };
     reader.readAsDataURL(file);
+  }
+
+  // Compress image before upload using Canvas
+  async function compressImage(file: File): Promise<File> {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const MAX_WIDTH = 800;
+        const scaleSize = MAX_WIDTH / img.width;
+        canvas.width = MAX_WIDTH;
+        canvas.height = img.height * scaleSize;
+        const ctx = canvas.getContext("2d");
+        ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              resolve(new File([blob], file.name, { type: "image/jpeg", lastModified: Date.now() }));
+            } else {
+              reject(new Error("Canvas to Blob failed"));
+            }
+          },
+          "image/jpeg",
+          0.8
+        );
+      };
+      img.onerror = (err) => reject(err);
+    });
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -43,17 +75,34 @@ export function AddProjectModal({ onAdd, onClose }: Props) {
     return Object.keys(errs).length === 0;
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!validate()) return;
-    const project: UserProject = {
-      id: `proj-${Date.now()}`,
-      name: name.trim(),
-      link: link.trim(),
-      description: desc.trim(),
-      imageBase64,
-    };
-    onAdd(project);
-    onClose();
+    setUploading(true);
+    let imageUrl: string | undefined = undefined;
+
+    try {
+      if (selectedFile) {
+        const compressedFile = await compressImage(selectedFile);
+        imageUrl = await uploadProjectThumbnail(uid, compressedFile);
+      }
+
+      const project: UserProject = {
+        id: `proj-${Date.now()}`,
+        name: name.trim(),
+        link: link.trim(),
+        description: desc.trim(),
+        imageUrl,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      onAdd(project);
+      onClose();
+    } catch (e) {
+      console.error("Failed to upload image:", e);
+      setErrors(prev => ({ ...prev, name: "Failed to upload image. Please try again." }));
+    } finally {
+      setUploading(false);
+    }
   }
 
   const inputStyle: React.CSSProperties = {
@@ -152,7 +201,7 @@ export function AddProjectModal({ onAdd, onClose }: Props) {
           />
           {imagePreview && (
             <button
-              onClick={() => { setImageBase64(undefined); setImagePreview(null); }}
+              onClick={() => { setSelectedFile(null); setImagePreview(null); }}
               style={{ marginTop: "0.4rem", background: "none", border: "none", color: "#fca5a5", cursor: "pointer", fontSize: "0.75rem", padding: 0 }}
             >
               ✕ Remove image
@@ -228,11 +277,12 @@ export function AddProjectModal({ onAdd, onClose }: Props) {
           <button
             id="add-project-submit-btn"
             onClick={handleSubmit}
-            style={{ padding: "0.6rem 1.5rem", borderRadius: "100px", background: "linear-gradient(135deg, #7c6ff7, #22d3ee)", border: "none", color: "#fff", cursor: "pointer", fontSize: "0.82rem", fontWeight: 700, transition: "all 0.2s", boxShadow: "0 0 20px rgba(124,111,247,0.3)" }}
-            onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 0 30px rgba(124,111,247,0.5)")}
-            onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "0 0 20px rgba(124,111,247,0.3)")}
+            disabled={uploading}
+            style={{ padding: "0.6rem 1.5rem", borderRadius: "100px", background: uploading ? "rgba(124,111,247,0.5)" : "linear-gradient(135deg, #7c6ff7, #22d3ee)", border: "none", color: "#fff", cursor: uploading ? "not-allowed" : "pointer", fontSize: "0.82rem", fontWeight: 700, transition: "all 0.2s", boxShadow: uploading ? "none" : "0 0 20px rgba(124,111,247,0.3)" }}
+            onMouseEnter={(e) => { if (!uploading) e.currentTarget.style.boxShadow = "0 0 30px rgba(124,111,247,0.5)"; }}
+            onMouseLeave={(e) => { if (!uploading) e.currentTarget.style.boxShadow = "0 0 20px rgba(124,111,247,0.3)"; }}
           >
-            ✦ Add Project
+            {uploading ? "Uploading..." : "✦ Add Project"}
           </button>
         </div>
       </div>

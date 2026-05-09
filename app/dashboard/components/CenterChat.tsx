@@ -31,7 +31,7 @@ function JDChip({ jd, onClear }: { jd: ParsedJobDescription; onClear: () => void
 }
 
 function MessageBubble({ msg }: { msg: Message }) {
-  const isAI = msg.role === "ai";
+  const isAI = msg.role === "assistant" || msg.role as any === "ai"; // fallback for old messages
   const formatted = msg.content.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 
   return (
@@ -151,7 +151,7 @@ export function CenterChat({
               }}
             />
           ) : (
-            <div 
+            <div
               onClick={() => setIsEditing(true)}
               style={{ fontWeight: 700, fontSize: "0.95rem", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.4rem" }}
               title="Click to rename"
@@ -179,7 +179,7 @@ export function CenterChat({
               <span style={{ width: 10, height: 10, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.2)", borderTopColor: "currentColor", animation: "spin-slow 0.6s linear infinite" }} />
             ) : session.isSaved ? "✓ Saved" : "💾 Save session"}
           </button>
-          
+
           <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.75rem", color: "#86efac", background: "rgba(74,222,128,0.08)", border: "1px solid rgba(74,222,128,0.2)", padding: "0.3rem 0.75rem", borderRadius: "100px" }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", display: "inline-block", animation: "pulse-glow 2s ease-in-out infinite" }} />
             AI Interviewer active
@@ -205,7 +205,7 @@ export function CenterChat({
           <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", animation: "fadeIn 0.3s ease both", marginBottom: "1rem" }}>
             <div style={{ width: 34, height: 34, borderRadius: "50%", background: "linear-gradient(135deg, #7c6ff7, #22d3ee)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.9rem", fontWeight: 800, color: "#fff" }}>Ai</div>
             <div style={{ padding: "0.75rem 1rem", borderRadius: "4px 1rem 1rem 1rem", background: "rgba(124,111,247,0.1)", border: "1px solid rgba(124,111,247,0.2)", display: "flex", gap: "0.35rem", alignItems: "center" }}>
-              {[0,1,2].map(i => <span key={i} style={{ width: 7, height: 7, borderRadius: "50%", background: "#7c6ff7", display: "inline-block", animation: `pulse-glow 1.2s ease-in-out ${i * 0.2}s infinite` }} />)}
+              {[0, 1, 2].map(i => <span key={i} style={{ width: 7, height: 7, borderRadius: "50%", background: "#7c6ff7", display: "inline-block", animation: `pulse-glow 1.2s ease-in-out ${i * 0.2}s infinite` }} />)}
             </div>
           </div>
         )}

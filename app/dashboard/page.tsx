@@ -2,14 +2,14 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
-import { doc, setDoc, getDoc, serverTimestamp, collection, addDoc, updateDoc, increment, arrayUnion, arrayRemove } from "firebase/firestore";
+import { doc, setDoc, getDoc, serverTimestamp, collection, addDoc, updateDoc, increment, arrayUnion, arrayRemove, writeBatch, getDocs, orderBy, query } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import { parseResumeText, ParsedResume } from "../lib/resumeParser";
 import { ParsedJobDescription } from "../lib/jobDescriptionParser";
 
 import { MockSession, Message, UserProject } from "./types";
-import { extractText, callGemini, summarizeProjects } from "./utils";
+import { extractText, callGemini, summarizeProjects, generateFeedback } from "./utils";
 
 import { LeftSidebar } from "./components/LeftSidebar";
 import { CenterChat } from "./components/CenterChat";
@@ -22,19 +22,20 @@ export default function Dashboard() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
 
-  const [appLoading, setAppLoading]             = useState(true);
-  const [uploadLoading, setUploadLoading]       = useState(false);
-  const [profile, setProfile]                   = useState<ParsedResume | null>(null);
-  const [sessions, setSessions]                 = useState<MockSession[]>([]);
-  const [activeSessionId, setActiveSessionId]   = useState<string | null>(null);
-  const [signingOut, setSigningOut]             = useState(false);
-  const [aiLoading, setAiLoading]               = useState(false);
-  const [showResumeModal, setShowResumeModal]   = useState(false);
-  const [saveCount, setSaveCount]               = useState(0);
+  const [appLoading, setAppLoading] = useState(true);
+  const [uploadLoading, setUploadLoading] = useState(false);
+  const [profile, setProfile] = useState<ParsedResume | null>(null);
+  const [sessions, setSessions] = useState<MockSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [showResumeModal, setShowResumeModal] = useState(false);
+  const [userPlan, setUserPlan] = useState<"free" | "pro">("free");
+  const [userUsage, setUserUsage] = useState<any>({ savedSessions: 0, aiTokensUsed: 0, resumesParsed: 0, interviewsCompleted: 0 });
   const [showPaymentModal, setShowPaymentModal] = useState(false);
-  const [savingSession, setSavingSession]       = useState(false);
-  const [userProjects, setUserProjects]         = useState<UserProject[]>([]);
-  const [showAddProject, setShowAddProject]     = useState(false);
+  const [savingSession, setSavingSession] = useState(false);
+  const [userProjects, setUserProjects] = useState<UserProject[]>([]);
+  const [showAddProject, setShowAddProject] = useState(false);
   const [summarizedProjectsCache, setSummarizedProjectsCache] = useState<string>("");
 
   const activeSession = sessions.find(s => s.id === activeSessionId) ?? null;
@@ -61,21 +62,31 @@ export default function Dashboard() {
     summarize();
   }, [profile?.projects, userProjects]);
 
-  // ─── Firestore save ─────────────────────────────────────────────────────────
   const saveToFirestore = useCallback(async (parsed: ParsedResume) => {
     if (!user) return;
     const docRef = doc(db, "User", user.uid);
+    // Use setDoc with merge so we don't overwrite plan/usage if they exist
     await setDoc(docRef, {
       uid: user.uid, email: user.email, displayName: user.displayName,
       resume: {
         name: parsed.name, email: parsed.email, phone: parsed.phone,
         location: parsed.location, linkedin: parsed.linkedin, github: parsed.github,
-        summary: parsed.summary, experience: parsed.experience, skills: parsed.skills,
+        summary: parsed.summary, experience: parsed.experience, rawExperienceText: parsed.rawExperienceText, skills: parsed.skills,
         projects: parsed.projects.map(p => ({ name: p.name, description: p.description, technologies: p.technologies })),
         education: parsed.education,
       },
       updatedAt: serverTimestamp(),
+      lastAccessedAt: serverTimestamp(),
     }, { merge: true });
+
+    // Increment resumesParsed
+    await setDoc(docRef, {
+      usage: {
+        resumesParsed: increment(1)
+      }
+    }, { merge: true });
+
+    setUserUsage((prev: any) => ({ ...prev, resumesParsed: (prev.resumesParsed || 0) + 1 }));
   }, [user]);
 
   // ─── Load profile ────────────────────────────────────────────────────────────
@@ -89,9 +100,10 @@ export default function Dashboard() {
         if (snap.exists()) {
           const r = snap.data()?.resume;
           if (r) {
-            setProfile({ name: r.name ?? "", email: r.email ?? "", phone: r.phone ?? "", location: r.location ?? "", linkedin: r.linkedin ?? "", github: r.github ?? "", summary: r.summary ?? "", experience: r.experience ?? "", rawText: "", skills: r.skills ?? [], projects: r.projects ?? [], education: r.education ?? [] });
+            setProfile({ name: r.name ?? "", email: r.email ?? "", phone: r.phone ?? "", location: r.location ?? "", linkedin: r.linkedin ?? "", github: r.github ?? "", summary: r.summary ?? "", experience: Array.isArray(r.experience) ? r.experience : [], rawExperienceText: r.rawExperienceText || r.experience || "", rawText: "", skills: r.skills ?? [], projects: r.projects ?? [], education: r.education ?? [] });
           }
-          setSaveCount(snap.data()?.saveCount ?? 0);
+          setUserPlan(snap.data()?.plan ?? "free");
+          setUserUsage(snap.data()?.usage ?? { savedSessions: 0, aiTokensUsed: 0, resumesParsed: 0, interviewsCompleted: 0 });
           setUserProjects(snap.data()?.userProjects ?? []);
         }
       } catch (e) { console.error(e); }
@@ -141,11 +153,11 @@ export default function Dashboard() {
         resumeProjects: profile?.projects ?? [],
         summarizedProjects: summarizedProjectsCache,
         resumeEducation: profile?.education ?? [],
-        resumeExperience: profile?.experience ?? "",
+        resumeExperience: profile?.experience ?? [],
         resumeName: profile?.name ?? "",
         difficulty: getDifficulty(jd),
       });
-      const firstMsg: Message = { id: `msg-${Date.now()}`, role: "ai", content: aiText, timestamp: new Date() };
+      const firstMsg: Message = { id: `msg-${Date.now()}`, role: "assistant", content: aiText, timestamp: new Date() };
       setSessions(prev => prev.map(s =>
         s.id === activeSessionId ? { ...s, messages: [firstMsg] } : s
       ));
@@ -175,8 +187,7 @@ export default function Dashboard() {
 
     const priorMessages = currentSession?.messages ?? [];
     const geminiHistory = priorMessages
-      .slice(0, -1)
-      .map(m => ({ role: m.role === "ai" ? "model" as const : "user" as const, text: m.content }));
+      .map(m => ({ role: m.role === "assistant" || (m.role as any) === "ai" ? "model" as const : "user" as const, text: m.content }));
 
     try {
       const aiText = await callGemini({
@@ -187,22 +198,45 @@ export default function Dashboard() {
         resumeProjects: profile?.projects ?? [],
         summarizedProjects: summarizedProjectsCache,
         resumeEducation: profile?.education ?? [],
-        resumeExperience: profile?.experience ?? "",
+        resumeExperience: profile?.experience ?? [],
         resumeName: profile?.name ?? "",
         difficulty: getDifficulty(currentSession?.jd ?? null),
       });
-      const aiMsg: Message = { id: `msg-${Date.now()}-a`, role: "ai", content: aiText, timestamp: new Date() };
+      const aiMsg: Message = { id: `msg-${Date.now()}-a`, role: "assistant", content: aiText, timestamp: new Date() };
       setSessions(prev => prev.map(s =>
         s.id === activeSessionId ? { ...s, messages: [...s.messages, aiMsg] } : s
       ));
     } catch (e) {
       console.error("[Gemini response]:", e);
-      const errMsg: Message = { id: `msg-${Date.now()}-err`, role: "ai", content: "⚠️ Failed to get a response. Please check your API key and try again.", timestamp: new Date() };
+      const errMsg: Message = { id: `msg-${Date.now()}-err`, role: "assistant", content: "⚠️ Failed to get a response. Please check your API key and try again.", timestamp: new Date() };
       setSessions(prev => prev.map(s =>
         s.id === activeSessionId ? { ...s, messages: [...s.messages, errMsg] } : s
       ));
     } finally {
       setAiLoading(false);
+    }
+  }
+
+  // ─── Generate Feedback ──────────────────────────────────────────────────────
+  async function handleGenerateFeedback(sessionId: string) {
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session || session.messages.length === 0) return;
+
+    try {
+      const feedback = await generateFeedback(session.messages.map(m => ({
+        role: m.role,
+        content: m.content
+      })));
+
+      setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, feedback } : s));
+
+      // Optionally save to Firestore immediately here
+      if (user) {
+        const sessionRef = doc(db, `Users/${user.uid}/Sessions`, sessionId);
+        await updateDoc(sessionRef, { feedback });
+      }
+    } catch (e) {
+      console.error("Error generating feedback:", e);
     }
   }
 
@@ -223,7 +257,7 @@ export default function Dashboard() {
     if (!user || !activeSession || savingSession) return;
     if (activeSession.isSaved) return;
 
-    if (saveCount >= 5) {
+    if (userPlan === "free" && (userUsage?.savedSessions || 0) >= 5) {
       setShowPaymentModal(true);
       return;
     }
@@ -231,22 +265,34 @@ export default function Dashboard() {
     setSavingSession(true);
     try {
       const sessRef = collection(db, "User", user.uid, "Sessions");
-      await addDoc(sessRef, {
-        ...activeSession,
+      const { messages, ...sessionData } = activeSession;
+
+      const sessionDocRef = await addDoc(sessRef, {
+        ...sessionData,
         createdAt: serverTimestamp(),
-        savedAt: serverTimestamp(),
-        messages: activeSession.messages.map(m => ({
+        updatedAt: serverTimestamp(),
+        lastAccessedAt: serverTimestamp(),
+        status: "active",
+      });
+
+      const batch = writeBatch(db);
+      messages.forEach(m => {
+        const msgRef = doc(db, "User", user.uid, "Sessions", sessionDocRef.id, "Messages", m.id);
+        batch.set(msgRef, {
           ...m,
           timestamp: m.timestamp instanceof Date ? m.timestamp : new Date(m.timestamp)
-        })),
+        });
       });
+      await batch.commit();
 
       const userRef = doc(db, "User", user.uid);
-      await updateDoc(userRef, {
-        saveCount: increment(1)
-      });
+      await setDoc(userRef, {
+        usage: {
+          savedSessions: increment(1)
+        }
+      }, { merge: true });
 
-      setSaveCount(prev => prev + 1);
+      setUserUsage((prev: any) => ({ ...prev, savedSessions: (prev.savedSessions || 0) + 1 }));
       setSessions(prev => prev.map(s => s.id === activeSessionId ? { ...s, isSaved: true } : s));
     } catch (e) {
       console.error("[Save Session]:", e);
@@ -347,8 +393,9 @@ export default function Dashboard() {
           onClose={() => setShowPaymentModal(false)}
         />
       )}
-      {showAddProject && (
+      {showAddProject && user && (
         <AddProjectModal
+          uid={user.uid}
           onAdd={handleAddProject}
           onClose={() => setShowAddProject(false)}
         />

@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
       resumeProjects?: { name: string; description: string; technologies: string[] }[];
       summarizedProjects?: string;
       resumeEducation?: { degree: string; institution: string; year: string }[];
-      resumeExperience?: string;
+      resumeExperience?: { company: string; role: string; duration: string; description: string; technologies?: string[] }[];
       resumeName: string;
       difficulty?: string;
     };
@@ -38,6 +38,7 @@ export async function POST(req: NextRequest) {
 
     const contextProjects = summarizedProjects || (resumeProjects || []).filter(p => !!p.name).map(p => `${p.name} - ${p.description}`).join("; ") || "None";
     const contextEducation = (resumeEducation || []).filter(e => !!e.degree).map(e => `${e.degree} from ${e.institution} (${e.year})`).join("; ") || "None";
+    const contextExperience = (resumeExperience || []).map(e => `${e.role} at ${e.company} (${e.duration}): ${e.description}`).join(" | ") || "None";
 
     const systemInstruction = `You are a strict, no-nonsense technical interviewer.
 
@@ -49,7 +50,7 @@ Context:
 Skills: ${resumeSkills.join(", ") || "None"}
 Projects: ${contextProjects}
 Education: ${contextEducation}
-Experience: ${resumeExperience || "None"}
+Experience: ${contextExperience}
 
 JD:
 * Mandatory: ${jdSkills || "None"}

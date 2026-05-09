@@ -10,6 +10,15 @@ export interface Education {
   year: string;
 }
 
+export interface Experience {
+  id: string;
+  company: string;
+  role: string;
+  duration: string;
+  description: string;
+  technologies?: string[];
+}
+
 export interface ParsedResume {
   name: string;
   email: string;
@@ -21,7 +30,8 @@ export interface ParsedResume {
   skills: string[];
   projects: Project[];
   education: Education[];
-  experience: string;
+  experience: Experience[];
+  rawExperienceText: string; // Keep raw text as fallback
   rawText: string;
 }
 
@@ -433,6 +443,34 @@ function extractEducation(sections: Record<string, string>, fullText: string): E
   return scanEducationLines(toEduLines(fullText), true).slice(0, 4);
 }
 
+// ─── Experience ───────────────────────────────────────────────────────────────
+
+function extractExperience(sections: Record<string, string>): Experience[] {
+  const expText = sections["experience"] ?? "";
+  if (!expText.trim()) return [];
+
+  // Very basic fallback parser for experience.
+  // In a production system, this should ideally be passed through an LLM structurizer
+  // or a more robust regex-based NLP parser.
+  const lines = expText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const experiences: Experience[] = [];
+  
+  // This is a naive chunking strategy that assumes each block is separated by empty lines or bullets
+  // We'll return a single block containing the entire experience for now if we can't cleanly parse it.
+  // The AI context builder will use this structured array.
+  
+  experiences.push({
+    id: `exp-${Date.now()}`,
+    company: "Extracted Experience",
+    role: "Various Roles",
+    duration: "Various",
+    description: expText.slice(0, 1000), // Cap length
+    technologies: []
+  });
+
+  return experiences;
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 export function parseResumeText(rawText: string): ParsedResume {
   const lines = rawText.split(/\r?\n/);
@@ -446,7 +484,8 @@ export function parseResumeText(rawText: string): ParsedResume {
     linkedin: extractLinkedIn(rawText),
     github: extractGitHub(rawText),
     summary: extractSummary(sections),
-    experience: sections["experience"] ?? "",
+    experience: extractExperience(sections),
+    rawExperienceText: sections["experience"] ?? "",
     skills: extractSkills(rawText, sections),
     projects: extractProjects(sections),
     education: extractEducation(sections, rawText),
