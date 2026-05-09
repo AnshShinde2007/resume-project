@@ -5,7 +5,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY ?? "" });
 
 export async function POST(req: NextRequest) {
   try {
-    const { history, userMessage, jd, resumeSkills, resumeProjects, resumeEducation, resumeExperience, resumeName, difficulty } = await req.json() as {
+    const { history, userMessage, jd, resumeSkills, resumeProjects, resumeEducation, resumeExperience, resumeName, difficulty, summarizedProjects } = await req.json() as {
       history: { role: "user" | "model"; text: string }[];
       userMessage: string;
       jd: {

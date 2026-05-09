@@ -1,5 +1,5 @@
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { app } from "../firebase"; // Assuming firebase.ts exports 'app'
+import app from "../firebase";
 
 export async function uploadProjectThumbnail(uid: string, file: File): Promise<string> {
   const storage = getStorage(app);
