@@ -63,12 +63,26 @@ export function categoriseSkills(skills: string[]) {
 }
 
 // ─── Real Gemini API call ─────────────────────────────────────────────────────
+export async function summarizeProjects(text: string): Promise<string> {
+  const res = await fetch("/api/summarize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error ?? `API error ${res.status}`);
+  }
+  const data = await res.json();
+  return data.summary as string;
+}
 export async function callGemini({
   history,
   userMessage,
   jd,
   resumeSkills,
   resumeProjects,
+  summarizedProjects,
   resumeEducation,
   resumeExperience,
   resumeName,
@@ -79,6 +93,7 @@ export async function callGemini({
   jd: ParsedJobDescription | null;
   resumeSkills: string[];
   resumeProjects: { name: string; description: string; technologies: string[] }[];
+  summarizedProjects?: string;
   resumeEducation: { degree: string; institution: string; year: string }[];
   resumeExperience: string;
   resumeName: string;
@@ -87,7 +102,7 @@ export async function callGemini({
   const res = await fetch("/api/interview", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ history, userMessage, jd, resumeSkills, resumeProjects, resumeEducation, resumeExperience, resumeName, difficulty }),
+    body: JSON.stringify({ history, userMessage, jd, resumeSkills, resumeProjects, summarizedProjects, resumeEducation, resumeExperience, resumeName, difficulty }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

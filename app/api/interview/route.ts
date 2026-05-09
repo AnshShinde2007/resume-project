@@ -21,6 +21,7 @@ export async function POST(req: NextRequest) {
       } | null;
       resumeSkills: string[];
       resumeProjects?: { name: string; description: string; technologies: string[] }[];
+      summarizedProjects?: string;
       resumeEducation?: { degree: string; institution: string; year: string }[];
       resumeExperience?: string;
       resumeName: string;
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
     const jdSkills = (jd?.skills || []).concat(jd?.qualifications || []).join(", ");
     const jdNiceToHave = (jd?.niceToHave || []).join(", ");
 
-    const contextProjects = (resumeProjects || []).filter(p => !!p.name).map(p => `${p.name} - ${p.description}`).join("; ") || "None";
+    const contextProjects = summarizedProjects || (resumeProjects || []).filter(p => !!p.name).map(p => `${p.name} - ${p.description}`).join("; ") || "None";
     const contextEducation = (resumeEducation || []).filter(e => !!e.degree).map(e => `${e.degree} from ${e.institution} (${e.year})`).join("; ") || "None";
 
     const systemInstruction = `You are a strict, no-nonsense technical interviewer.

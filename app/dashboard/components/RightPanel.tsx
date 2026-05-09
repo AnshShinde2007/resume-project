@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { ParsedResume } from "../../lib/resumeParser";
 import { categoriseSkills, tagColour, initials } from "../utils";
+import { UserProject } from "../types";
 
 function InfoRow({ icon, value, href }: { icon: string; value: string; href?: string }) {
   const content = <span style={{ fontSize: "0.78rem", color: href ? "#93c5fd" : "var(--text-secondary)", wordBreak: "break-all" }}>{value}</span>;
@@ -18,14 +19,20 @@ export function RightPanel({
   onSignOut,
   signingOut,
   onUploadResume,
+  userProjects,
+  onAddProject,
+  onDeleteProject,
 }: {
   profile: ParsedResume | null;
   user: { displayName: string | null; email: string | null; uid: string };
   onSignOut: () => void;
   signingOut: boolean;
   onUploadResume: () => void;
+  userProjects: UserProject[];
+  onAddProject: () => void;
+  onDeleteProject: (id: string) => void;
 }) {
-  const [tab, setTab] = useState<"skills" | "info">("skills");
+  const [tab, setTab] = useState<"skills" | "info" | "projects">("skills");
   const skillCats = profile ? categoriseSkills(profile.skills) : [];
   const name = profile?.name || user.displayName || user.email || "User";
 
@@ -92,9 +99,9 @@ export function RightPanel({
         ) : (
           <>
             <div style={{ display: "flex", gap: "0.25rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-subtle)", borderRadius: "100px", padding: "0.2rem", marginBottom: "1rem" }}>
-              {(["skills","info"] as const).map(t => (
-                <button key={t} onClick={() => setTab(t)} style={{ flex: 1, padding: "0.4rem 0", borderRadius: "100px", border: "none", cursor: "pointer", fontWeight: 600, fontSize: "0.72rem", transition: "all 0.2s", textTransform: "capitalize", background: tab === t ? "linear-gradient(135deg, #7c6ff7, #a78bfa)" : "transparent", color: tab === t ? "#fff" : "var(--text-secondary)" }}>
-                  {t === "skills" ? "⚡ Skills" : "ℹ️ Info"}
+              {(["skills", "projects", "info"] as const).map(t => (
+                <button key={t} onClick={() => setTab(t)} style={{ flex: 1, padding: "0.4rem 0", borderRadius: "100px", border: "none", cursor: "pointer", fontWeight: 600, fontSize: "0.68rem", transition: "all 0.2s", textTransform: "capitalize", background: tab === t ? "linear-gradient(135deg, #7c6ff7, #a78bfa)" : "transparent", color: tab === t ? "#fff" : "var(--text-secondary)" }}>
+                  {t === "skills" ? "⚡ Skills" : t === "projects" ? "🗂️ Projects" : "ℹ️ Info"}
                 </button>
               ))}
             </div>
@@ -109,6 +116,57 @@ export function RightPanel({
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {tab === "projects" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+                <button
+                  id="add-project-btn"
+                  onClick={onAddProject}
+                  style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem", padding: "0.55rem 1rem", borderRadius: "10px", background: "linear-gradient(135deg, rgba(124,111,247,0.2), rgba(34,211,238,0.1))", border: "1px solid rgba(124,111,247,0.35)", color: "#c4b5fd", cursor: "pointer", fontSize: "0.8rem", fontWeight: 700, transition: "all 0.2s" }}
+                  onMouseEnter={e => (e.currentTarget.style.boxShadow = "0 0 18px rgba(124,111,247,0.2)")}
+                  onMouseLeave={e => (e.currentTarget.style.boxShadow = "none")}
+                >
+                  <span style={{ fontSize: "1rem" }}>+</span> Add Project
+                </button>
+
+                {userProjects.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "1.5rem 0.5rem" }}>
+                    <div style={{ fontSize: "2rem", marginBottom: "0.4rem", opacity: 0.35 }}>🗂️</div>
+                    <p style={{ color: "var(--text-muted)", fontSize: "0.78rem", lineHeight: 1.6 }}>No projects yet.<br />Add your work to personalise your interview.</p>
+                  </div>
+                ) : (
+                  userProjects.map(proj => (
+                    <div key={proj.id} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-subtle)", borderRadius: "12px", overflow: "hidden", transition: "border-color 0.2s" }}
+                      onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(124,111,247,0.3)")}
+                      onMouseLeave={e => (e.currentTarget.style.borderColor = "var(--border-subtle)")}>
+                      {proj.imageBase64 && (
+                        <img src={proj.imageBase64} alt={proj.name} style={{ width: "100%", height: 100, objectFit: "cover", display: "block" }} />
+                      )}
+                      <div style={{ padding: "0.75rem" }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.5rem" }}>
+                          <span style={{ fontWeight: 700, fontSize: "0.85rem", color: "#f0f0ff", lineHeight: 1.3 }}>{proj.name}</span>
+                          <button
+                            onClick={() => onDeleteProject(proj.id)}
+                            title="Remove project"
+                            style={{ background: "none", border: "none", color: "rgba(248,113,113,0.5)", cursor: "pointer", fontSize: "0.8rem", padding: "0 0.1rem", flexShrink: 0, transition: "color 0.15s" }}
+                            onMouseEnter={e => (e.currentTarget.style.color = "#f87171")}
+                            onMouseLeave={e => (e.currentTarget.style.color = "rgba(248,113,113,0.5)")}
+                          >✕</button>
+                        </div>
+                        {proj.link && (
+                          <a href={proj.link} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem", fontSize: "0.7rem", color: "#93c5fd", textDecoration: "none", marginTop: "0.25rem", wordBreak: "break-all" }}>
+                            🔗 {proj.link.replace(/^https?:\/\//, "").slice(0, 36)}{proj.link.length > 42 ? "…" : ""}
+                          </a>
+                        )}
+                        <p style={{ margin: "0.4rem 0 0", fontSize: "0.73rem", color: "var(--text-secondary)", lineHeight: 1.6 }}>
+                          {proj.description.slice(0, 120)}{proj.description.length > 120 ? "…" : ""}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             )}
 

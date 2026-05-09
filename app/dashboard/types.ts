@@ -1,5 +1,13 @@
 import { ParsedJobDescription } from "../lib/jobDescriptionParser";
 
+export interface UserProject {
+  id: string;
+  name: string;
+  link: string;
+  description: string;
+  imageBase64?: string; // base64 encoded image
+}
+
 export interface Message {
   id: string;
   role: "user" | "ai";

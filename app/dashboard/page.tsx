@@ -2,20 +2,21 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
-import { doc, setDoc, getDoc, serverTimestamp, collection, addDoc, updateDoc, increment } from "firebase/firestore";
+import { doc, setDoc, getDoc, serverTimestamp, collection, addDoc, updateDoc, increment, arrayUnion, arrayRemove } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import { parseResumeText, ParsedResume } from "../lib/resumeParser";
 import { ParsedJobDescription } from "../lib/jobDescriptionParser";
 
-import { MockSession, Message } from "./types";
-import { extractText, callGemini } from "./utils";
+import { MockSession, Message, UserProject } from "./types";
+import { extractText, callGemini, summarizeProjects } from "./utils";
 
 import { LeftSidebar } from "./components/LeftSidebar";
 import { CenterChat } from "./components/CenterChat";
 import { RightPanel } from "./components/RightPanel";
 import { ResumeUploadModal } from "./components/ResumeUploadModal";
 import { PaymentModal } from "./components/PaymentModal";
+import { AddProjectModal } from "./components/AddProjectModal";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -32,8 +33,33 @@ export default function Dashboard() {
   const [saveCount, setSaveCount]               = useState(0);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [savingSession, setSavingSession]       = useState(false);
+  const [userProjects, setUserProjects]         = useState<UserProject[]>([]);
+  const [showAddProject, setShowAddProject]     = useState(false);
+  const [summarizedProjectsCache, setSummarizedProjectsCache] = useState<string>("");
 
   const activeSession = sessions.find(s => s.id === activeSessionId) ?? null;
+
+  // ─── Summarize projects ─────────────────────────────────────────────────────
+  useEffect(() => {
+    async function summarize() {
+      const allProjects = [
+        ...(profile?.projects ?? []).map(p => `${p.name}: ${p.description}`),
+        ...userProjects.map(p => `${p.name}: ${p.description}`)
+      ];
+      if (allProjects.length === 0) {
+        setSummarizedProjectsCache("");
+        return;
+      }
+      const combinedText = allProjects.join(" | ");
+      try {
+        const summary = await summarizeProjects(combinedText);
+        setSummarizedProjectsCache(summary);
+      } catch (e) {
+        console.error("Failed to summarize projects", e);
+      }
+    }
+    summarize();
+  }, [profile?.projects, userProjects]);
 
   // ─── Firestore save ─────────────────────────────────────────────────────────
   const saveToFirestore = useCallback(async (parsed: ParsedResume) => {
@@ -66,6 +92,7 @@ export default function Dashboard() {
             setProfile({ name: r.name ?? "", email: r.email ?? "", phone: r.phone ?? "", location: r.location ?? "", linkedin: r.linkedin ?? "", github: r.github ?? "", summary: r.summary ?? "", experience: r.experience ?? "", rawText: "", skills: r.skills ?? [], projects: r.projects ?? [], education: r.education ?? [] });
           }
           setSaveCount(snap.data()?.saveCount ?? 0);
+          setUserProjects(snap.data()?.userProjects ?? []);
         }
       } catch (e) { console.error(e); }
       finally { setAppLoading(false); }
@@ -112,6 +139,7 @@ export default function Dashboard() {
         jd,
         resumeSkills: profile?.skills ?? [],
         resumeProjects: profile?.projects ?? [],
+        summarizedProjects: summarizedProjectsCache,
         resumeEducation: profile?.education ?? [],
         resumeExperience: profile?.experience ?? "",
         resumeName: profile?.name ?? "",
@@ -157,6 +185,7 @@ export default function Dashboard() {
         jd: currentSession?.jd ?? null,
         resumeSkills: profile?.skills ?? [],
         resumeProjects: profile?.projects ?? [],
+        summarizedProjects: summarizedProjectsCache,
         resumeEducation: profile?.education ?? [],
         resumeExperience: profile?.experience ?? "",
         resumeName: profile?.name ?? "",
@@ -237,6 +266,34 @@ export default function Dashboard() {
     router.push("/");
   }
 
+  // ─── Add / delete project ─────────────────────────────────────────────────────
+  async function handleAddProject(project: UserProject) {
+    if (!user) return;
+    setUserProjects(prev => [project, ...prev]);
+    try {
+      await updateDoc(doc(db, "User", user.uid), {
+        userProjects: arrayUnion(project),
+      });
+    } catch (e) {
+      console.error("[Add Project]:", e);
+    }
+  }
+
+  async function handleDeleteProject(id: string) {
+    if (!user) return;
+    const proj = userProjects.find(p => p.id === id);
+    setUserProjects(prev => prev.filter(p => p.id !== id));
+    if (proj) {
+      try {
+        await updateDoc(doc(db, "User", user.uid), {
+          userProjects: arrayRemove(proj),
+        });
+      } catch (e) {
+        console.error("[Delete Project]:", e);
+      }
+    }
+  }
+
   if (authLoading || appLoading) {
     return (
       <div style={{ minHeight: "100vh", background: "var(--bg-primary)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -273,6 +330,9 @@ export default function Dashboard() {
           onSignOut={handleSignOut}
           signingOut={signingOut}
           onUploadResume={() => setShowResumeModal(true)}
+          userProjects={userProjects}
+          onAddProject={() => setShowAddProject(true)}
+          onDeleteProject={handleDeleteProject}
         />
       )}
       {showResumeModal && (
@@ -285,6 +345,12 @@ export default function Dashboard() {
       {showPaymentModal && (
         <PaymentModal
           onClose={() => setShowPaymentModal(false)}
+        />
+      )}
+      {showAddProject && (
+        <AddProjectModal
+          onAdd={handleAddProject}
+          onClose={() => setShowAddProject(false)}
         />
       )}
     </div>
