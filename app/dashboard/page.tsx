@@ -332,14 +332,9 @@ export default function Dashboard() {
   // ─── Add / delete project ─────────────────────────────────────────────────────
   async function handleAddProject(project: UserProject) {
     if (!user) return;
+    const firestoreProject = Object.fromEntries(Object.entries(project).filter(([, value]) => value !== undefined));
+    await updateDoc(doc(db, "User", user.uid), { userProjects: arrayUnion(firestoreProject) });
     setUserProjects(prev => [project, ...prev]);
-    try {
-      await updateDoc(doc(db, "User", user.uid), {
-        userProjects: arrayUnion(project),
-      });
-    } catch (e) {
-      console.error("[Add Project]:", e);
-    }
   }
 
   async function handleDeleteProject(id: string) {

@@ -6,7 +6,7 @@ import { uploadProjectThumbnail } from "../../lib/storage";
 
 interface Props {
   uid: string;
-  onAdd: (project: UserProject) => void;
+  onAdd: (project: UserProject) => Promise<void>;
   onClose: () => void;
 }
 
@@ -95,11 +95,11 @@ export function AddProjectModal({ uid, onAdd, onClose }: Props) {
         createdAt: new Date(),
         updatedAt: new Date(),
       };
-      onAdd(project);
+      await onAdd(project);
       onClose();
     } catch (e) {
-      console.error("Failed to upload image:", e);
-      setErrors(prev => ({ ...prev, name: "Failed to upload image. Please try again." }));
+      console.error("Failed to add project:", e);
+      setErrors(prev => ({ ...prev, name: "Failed to save project. Please try again." }));
     } finally {
       setUploading(false);
     }
