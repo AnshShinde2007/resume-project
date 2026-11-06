@@ -2,7 +2,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "firebase/auth";
-import { doc, setDoc, getDoc, serverTimestamp, collection, addDoc, updateDoc, increment, arrayUnion, arrayRemove, writeBatch, getDocs, orderBy, query } from "firebase/firestore";
+import { doc, setDoc, getDoc, serverTimestamp, collection, updateDoc, increment, arrayUnion, arrayRemove, writeBatch, getDocs, orderBy, query } from "firebase/firestore";
 import { auth, db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import { parseResumeText, ParsedResume } from "../lib/resumeParser";
@@ -106,6 +106,23 @@ export default function Dashboard() {
           setUserUsage(snap.data()?.usage ?? { savedSessions: 0, aiTokensUsed: 0, resumesParsed: 0, interviewsCompleted: 0 });
           setUserProjects(snap.data()?.userProjects ?? []);
         }
+        const savedSessions = await getDocs(query(collection(db, "User", user!.uid, "Sessions"), orderBy("createdAt", "desc")));
+        const loadedSessions = await Promise.all(savedSessions.docs.map(async sessionSnap => {
+          const data = sessionSnap.data();
+          const messagesSnap = await getDocs(query(collection(db, "User", user!.uid, "Sessions", sessionSnap.id, "Messages"), orderBy("timestamp", "asc")));
+          return {
+            ...data,
+            id: sessionSnap.id,
+            createdAt: data.createdAt?.toDate?.() ?? new Date(),
+            messages: messagesSnap.docs.map(messageSnap => {
+              const message = messageSnap.data();
+              return { ...message, id: messageSnap.id, timestamp: message.timestamp?.toDate?.() ?? new Date() } as Message;
+            }),
+            jd: data.jd ?? null,
+            isSaved: true,
+          } as MockSession;
+        }));
+        setSessions(loadedSessions);
       } catch (e) { console.error(e); }
       finally { setAppLoading(false); }
     }
@@ -264,10 +281,10 @@ export default function Dashboard() {
 
     setSavingSession(true);
     try {
-      const sessRef = collection(db, "User", user.uid, "Sessions");
+      const sessRef = doc(db, "User", user.uid, "Sessions", activeSession.id);
       const { messages, ...sessionData } = activeSession;
 
-      const sessionDocRef = await addDoc(sessRef, {
+      await setDoc(sessRef, {
         ...sessionData,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -277,7 +294,7 @@ export default function Dashboard() {
 
       const batch = writeBatch(db);
       messages.forEach(m => {
-        const msgRef = doc(db, "User", user.uid, "Sessions", sessionDocRef.id, "Messages", m.id);
+        const msgRef = doc(db, "User", user.uid, "Sessions", activeSession.id, "Messages", m.id);
         batch.set(msgRef, {
           ...m,
           timestamp: m.timestamp instanceof Date ? m.timestamp : new Date(m.timestamp)
