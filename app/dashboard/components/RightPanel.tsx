@@ -74,7 +74,7 @@ export function RightPanel({
           </div>
           {profile && (
             <div style={{ display: "flex", gap: "0.5rem" }}>
-              {[{ label: "Skills", val: profile.skills.length }, { label: "Projects", val: profile.projects.length }].map(s => (
+              {[{ label: "Skills", val: profile.skills.length }, { label: "Projects", val: profile.projects.length + userProjects.length }].map(s => (
                 <div key={s.label} style={{ textAlign: "center", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-subtle)", borderRadius: "0.65rem", padding: "0.4rem 0.75rem" }}>
                   <div style={{ fontSize: "1.1rem", fontWeight: 800, background: "linear-gradient(135deg, #c4b5fd, #67e8f9)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}>{s.val}</div>
                   <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{s.label}</div>
